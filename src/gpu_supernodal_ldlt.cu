@@ -258,12 +258,33 @@ __global__ void factorSingleColumnKernel(DeviceFrontDescriptor* descriptors)
 
     __shared__ int accepted;
     __shared__ float diagonal;
+    __shared__ float column_maximum[256];
+    float local_maximum = 0.0f;
+    for (int row = 1 + threadIdx.x; row < order; row += blockDim.x) {
+        local_maximum = fmaxf(local_maximum, absf(matrix[row]));
+    }
+    column_maximum[threadIdx.x] = local_maximum;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (threadIdx.x < stride) {
+            column_maximum[threadIdx.x] = fmaxf(
+                column_maximum[threadIdx.x],
+                column_maximum[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+
     if (threadIdx.x == 0) {
         diagonal = matrix[0];
+        const float diagonal_absolute = absf(diagonal);
+        const float scale = fmaxf(diagonal_absolute, column_maximum[0]);
         const float tolerance = fmaxf(
             front.absolute_tolerance,
-            front.relative_tolerance * absf(diagonal));
-        accepted = absf(diagonal) > tolerance ? 1 : 0;
+            front.relative_tolerance * scale);
+        accepted = diagonal_absolute > tolerance &&
+                   (column_maximum[0] <= tolerance ||
+                    diagonal_absolute >= front.gamma * column_maximum[0])
+            ? 1 : 0;
         front.pivot_size[0] = accepted ? 1 : 0;
     }
     __syncthreads();
@@ -328,33 +349,32 @@ __global__ void factorSmallMediumKernel(DeviceFrontDescriptor* descriptors)
             decision = 0;
             pivot_row = step;
             if (step < active_end) {
-                float scale = 0.0f;
-                for (int col = step; col < active_end; ++col) {
-                    for (int row = col; row < active_end; ++row) {
-                        scale = fmaxf(scale, absf(matrix[row + col * order]));
-                    }
-                }
-                const float tolerance = fmaxf(
-                    front.absolute_tolerance,
-                    front.relative_tolerance * scale);
                 const float diagonal = absf(matrix[step + step * order]);
                 float lambda = 0.0f;
                 int p = step;
-                for (int row = step + 1; row < active_end; ++row) {
+                // 非 fully-summed 行不能作为主元，但必须参与列稳定性检查。
+                for (int row = step + 1; row < order; ++row) {
                     const float candidate = absf(matrix[row + step * order]);
                     if (candidate > lambda) {
                         lambda = candidate;
                         p = row;
                     }
                 }
+                const float scale = fmaxf(diagonal, lambda);
+                const float tolerance = fmaxf(
+                    front.absolute_tolerance,
+                    front.relative_tolerance * scale);
 
                 if (lambda <= tolerance) {
                     decision = diagonal > tolerance ? 1 : 3;
                 } else if (diagonal >= front.gamma * lambda) {
                     decision = 1;
+                } else if (p >= active_end) {
+                    // The BK row test requires a fully-summed pivot candidate.
+                    decision = 3;
                 } else {
                     float sigma = 0.0f;
-                    for (int col = step; col < active_end; ++col) {
+                    for (int col = step; col < order; ++col) {
                         if (col != p) {
                             sigma = fmaxf(sigma, absf(lowerValue(matrix, order, p, col)));
                         }
@@ -1653,8 +1673,9 @@ private:
 
             const float diagonal_value = panelScalar(
                 front, work, panel_begin, panel_columns, step, step, scalar);
+            // 更新行和已延迟行不能被选作主元，但其耦合仍决定当前主元是否稳定。
             const DeviceMaxPair column_max = panelMaximum(
-                front, work, panel_begin, panel_columns, step, active_end,
+                front, work, panel_begin, panel_columns, step, front.order,
                 false, step, partial, max_result);
             const float diagonal = std::fabs(diagonal_value);
             const float local_scale = std::max(diagonal, column_max.value);
@@ -1669,9 +1690,12 @@ private:
             } else if (diagonal >=
                        options_.bunch_kaufman_gamma * column_max.value) {
                 pivot_order = 1;
+            } else if (column_max.index >= active_end) {
+                // The BK row test requires a fully-summed pivot candidate.
+                pivot_order = 0;
             } else {
                 const DeviceMaxPair row_max = panelMaximum(
-                    front, work, panel_begin, panel_columns, step, active_end,
+                    front, work, panel_begin, panel_columns, step, front.order,
                     true, column_max.index, partial, max_result);
                 const float sigma = row_max.value;
                 const float candidate_diagonal = std::fabs(panelScalar(
