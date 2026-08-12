@@ -1,0 +1,2 @@
+/usr/bin/ar qc libio_func.a CMakeFiles/io_func.dir/utils/io_func.cpp.o
+/usr/bin/ranlib libio_func.a

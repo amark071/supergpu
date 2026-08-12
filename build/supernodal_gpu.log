@@ -1,0 +1,134 @@
+[2026-08-11 11:08:54] Program started
+Loaded 173391 nonzero entries from data/A_1215.dat
+1215x1215, nonzero = 173391
+[2026-08-11 11:08:54] Program finished (exit code: 0, elapsed: 0 s)
+
+
+[2026-08-11 13:43:19] Program started
+Loaded 173391 nonzero entries from data/A_1215.dat
+1215x1215, nonzero = 173391
+[2026-08-11 13:43:19] Program finished (exit code: 0, elapsed: 0 s)
+
+
+[2026-08-11 14:29:21] Program started
+Loaded 173391 nonzero entries from data/A_1215.dat
+1215x1215, nonzero = 173391
+METIS ordering completed; reordered nonzeros = 173391
+First permutation entries (new -> old, 1-based): 820 812 810 809 807 805 864 844 834 828
+[2026-08-11 14:29:21] Program finished (exit code: 0, elapsed: 0 s)
+
+
+[2026-08-11 14:42:54] Program started
+Loaded 173391 nonzero entries from data/A_1215.dat
+1215x1215, nonzero = 173391
+METIS ordering completed; reordered nonzeros = 173391
+Reordered matrix written to data/A_1215_metis.dat
+First permutation entries (new -> old, 1-based): 820 812 810 809 807 805 864 844 834 828
+[2026-08-11 14:42:55] Program finished (exit code: 0, elapsed: 1 s)
+
+
+[2026-08-11 14:42:58] Program started
+Loaded 173391 nonzero entries from data/A_1215.dat
+1215x1215, nonzero = 173391
+METIS ordering completed; reordered nonzeros = 173391
+Reordered matrix written to data/A_1215_metis.dat
+First permutation entries (new -> old, 1-based): 820 812 810 809 807 805 864 844 834 828
+[2026-08-11 14:42:58] Program finished (exit code: 0, elapsed: 0 s)
+
+
+[2026-08-11 15:58:27] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS ordering completed; reordered nonzeros = 173391
+Original undirected graph edges = 86268
+Symbolic fill-in entries (one triangular side) = 68385
+Symbolic factor L nonzeros (including diagonal) = 155868
+Symbolic fill ratio = 1.78169
+[2026-08-11 15:58:27] Program finished (exit code: 0, elapsed: 0 s)
+
+
+[2026-08-11 16:12:03] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS ordering completed; reordered nonzeros = 173391
+Original undirected graph edges = 86268
+Symbolic fill-in entries (one triangular side) = 68385
+Symbolic factor L nonzeros (including diagonal) = 155868
+Symbolic fill ratio = 1.78169
+[2026-08-11 16:12:04] Program finished (exit code: 0, elapsed: 1 s)
+
+
+[2026-08-11 16:32:47] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS symbolic fill-in = 68385, ratio = 1.78169
+AMD symbolic fill-in = 92043, ratio = 2.05212
+Selected ordering method = METIS
+Selected symbolic factor L nonzeros = 155868
+Reordered nonzeros = 173391
+[2026-08-11 16:32:47] Program finished (exit code: 0, elapsed: 0 s)
+
+[2026-08-12 11:32:08] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS symbolic fill-in = 68385, ratio = 1.78169
+AMD symbolic fill-in = 92043, ratio = 2.05212
+Selected ordering method = METIS
+Selected symbolic factor L nonzeros = 155868
+Reordered nonzeros = 173391
+CHOLMOD error: symmetric lower not supported. file: /home/master/te1/SuiteSparse/CHOLMOD/Cholesky/cholmod_etree.c line: 215
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  CHOLMOD failed to construct the elimination tree
+[2026-08-12 11:32:09] Program finished (exit code: Subprocess aborted, elapsed: 1 s)
+
+[2026-08-12 11:35:52] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS symbolic fill-in = 68385, ratio = 1.78169
+AMD symbolic fill-in = 92043, ratio = 2.05212
+Selected ordering method = METIS
+Selected symbolic factor L nonzeros = 155868
+Reordered nonzeros = 173391
+Elimination tree columns = 1215
+Basic supernodes = 390
+[2026-08-12 11:35:53] Program finished (exit code: 0, elapsed: 1 s)
+
+[2026-08-12 11:46:57] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS symbolic fill-in = 68385, ratio = 1.78169
+AMD symbolic fill-in = 92043, ratio = 2.05212
+Selected ordering method = METIS
+Selected symbolic factor L nonzeros = 155868
+Reordered nonzeros = 173391
+Elimination tree columns = 1215
+Basic supernodes = 390
+Visualization data = /home/master/supernodal_gpu/build/visualization
+[2026-08-12 11:46:57] Program finished (exit code: 0, elapsed: 0 s)
+
+[2026-08-12 13:54:38] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS symbolic fill-in = 68385, ratio = 1.78169
+AMD symbolic fill-in = 92043, ratio = 2.05212
+Selected ordering method = METIS
+Selected symbolic factor L nonzeros = 155868
+Reordered nonzeros = 173391
+Elimination tree columns = 1215
+Basic supernodes = 390
+Visualization data = /home/master/supernodal_gpu/build/visualization
+[2026-08-12 13:54:38] Program finished (exit code: 0, elapsed: 0 s)
+
+[2026-08-12 13:54:51] Program started
+Loaded 173391 nonzero entries
+1215x1215, nonzero = 173391
+METIS symbolic fill-in = 68385, ratio = 1.78169
+AMD symbolic fill-in = 92043, ratio = 2.05212
+Selected ordering method = METIS
+Selected symbolic factor L nonzeros = 155868
+Reordered nonzeros = 173391
+Elimination tree columns = 1215
+Basic supernodes = 330
+Visualization data = /home/master/supernodal_gpu/build/visualization
+[2026-08-12 13:54:52] Program finished (exit code: 0, elapsed: 1 s)
+

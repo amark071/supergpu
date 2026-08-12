@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcholmod_symbolic.a CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o
+/usr/bin/ranlib libcholmod_symbolic.a

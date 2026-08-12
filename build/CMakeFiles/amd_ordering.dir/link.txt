@@ -1,0 +1,2 @@
+/usr/bin/ar qc libamd_ordering.a CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o
+/usr/bin/ranlib libamd_ordering.a

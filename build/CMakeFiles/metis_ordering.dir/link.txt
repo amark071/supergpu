@@ -1,0 +1,2 @@
+/usr/bin/ar qc libmetis_ordering.a CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o
+/usr/bin/ranlib libmetis_ordering.a

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libordering.a CMakeFiles/ordering.dir/src/ordering.cpp.o
+/usr/bin/ranlib libordering.a
