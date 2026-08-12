@@ -111,6 +111,15 @@ struct DeviceMaxPair {
     int index;
 };
 
+struct DeviceLargePanelState {
+    int step;
+    int active_end;
+    int panel_columns;
+    int one_by_one;
+    int two_by_two;
+    int delay_current;
+};
+
 __device__ float absf(float value)
 {
     return value < 0.0f ? -value : value;
@@ -555,23 +564,19 @@ __device__ float panelEntry(
     return value;
 }
 
-__global__ void panelColumnMaxKernel(
+__device__ DeviceMaxPair blockPanelColumnMaximum(
     const float* matrix,
     const float* work,
     int ld,
     int panel_begin,
     int panel_columns,
     int step,
-    int active_end,
-    DeviceMaxPair* output)
+    float* shared_values,
+    int* shared_indices)
 {
-    __shared__ float values[256];
-    __shared__ int indices[256];
     float best = 0.0f;
     int best_index = step;
-    for (int row = step + 1 + blockIdx.x * blockDim.x + threadIdx.x;
-         row < active_end;
-         row += blockDim.x * gridDim.x) {
+    for (int row = step + 1 + threadIdx.x; row < ld; row += blockDim.x) {
         const float value = absf(panelEntry(
             matrix, work, ld, panel_begin, panel_columns, row, step));
         if (value > best) {
@@ -579,23 +584,24 @@ __global__ void panelColumnMaxKernel(
             best_index = row;
         }
     }
-    values[threadIdx.x] = best;
-    indices[threadIdx.x] = best_index;
+    shared_values[threadIdx.x] = best;
+    shared_indices[threadIdx.x] = best_index;
     __syncthreads();
     for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
-        if (threadIdx.x < stride && values[threadIdx.x + stride] > values[threadIdx.x]) {
-            values[threadIdx.x] = values[threadIdx.x + stride];
-            indices[threadIdx.x] = indices[threadIdx.x + stride];
+        if (threadIdx.x < stride &&
+            shared_values[threadIdx.x + stride] > shared_values[threadIdx.x]) {
+            shared_values[threadIdx.x] = shared_values[threadIdx.x + stride];
+            shared_indices[threadIdx.x] = shared_indices[threadIdx.x + stride];
         }
         __syncthreads();
     }
-    if (threadIdx.x == 0) {
-        output[blockIdx.x].value = values[0];
-        output[blockIdx.x].index = indices[0];
-    }
+    DeviceMaxPair result;
+    result.value = shared_values[0];
+    result.index = shared_indices[0];
+    return result;
 }
 
-__global__ void panelRowMaxKernel(
+__device__ DeviceMaxPair blockPanelRowMaximum(
     const float* matrix,
     const float* work,
     int ld,
@@ -603,16 +609,12 @@ __global__ void panelRowMaxKernel(
     int panel_columns,
     int row,
     int step,
-    int active_end,
-    DeviceMaxPair* output)
+    float* shared_values,
+    int* shared_indices)
 {
-    __shared__ float values[256];
-    __shared__ int indices[256];
     float best = 0.0f;
     int best_index = step;
-    for (int col = step + blockIdx.x * blockDim.x + threadIdx.x;
-         col < active_end;
-         col += blockDim.x * gridDim.x) {
+    for (int col = step + threadIdx.x; col < ld; col += blockDim.x) {
         if (col != row) {
             const float value = absf(panelEntry(
                 matrix, work, ld, panel_begin, panel_columns, row, col));
@@ -622,198 +624,267 @@ __global__ void panelRowMaxKernel(
             }
         }
     }
-    values[threadIdx.x] = best;
-    indices[threadIdx.x] = best_index;
+    shared_values[threadIdx.x] = best;
+    shared_indices[threadIdx.x] = best_index;
     __syncthreads();
     for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
-        if (threadIdx.x < stride && values[threadIdx.x + stride] > values[threadIdx.x]) {
-            values[threadIdx.x] = values[threadIdx.x + stride];
-            indices[threadIdx.x] = indices[threadIdx.x + stride];
+        if (threadIdx.x < stride &&
+            shared_values[threadIdx.x + stride] > shared_values[threadIdx.x]) {
+            shared_values[threadIdx.x] = shared_values[threadIdx.x + stride];
+            shared_indices[threadIdx.x] = shared_indices[threadIdx.x + stride];
         }
         __syncthreads();
     }
-    if (threadIdx.x == 0) {
-        output[blockIdx.x].value = values[0];
-        output[blockIdx.x].index = indices[0];
-    }
+    DeviceMaxPair result;
+    result.value = shared_values[0];
+    result.index = shared_indices[0];
+    return result;
 }
 
-__global__ void reduceMaxPairsKernel(
-    const DeviceMaxPair* input,
-    int count,
-    DeviceMaxPair* output)
-{
-    __shared__ float values[256];
-    __shared__ int indices[256];
-    float best = 0.0f;
-    int best_index = -1;
-    for (int i = threadIdx.x; i < count; i += blockDim.x) {
-        if (input[i].value > best) {
-            best = input[i].value;
-            best_index = input[i].index;
-        }
-    }
-    values[threadIdx.x] = best;
-    indices[threadIdx.x] = best_index;
-    __syncthreads();
-    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
-        if (threadIdx.x < stride && values[threadIdx.x + stride] > values[threadIdx.x]) {
-            values[threadIdx.x] = values[threadIdx.x + stride];
-            indices[threadIdx.x] = indices[threadIdx.x + stride];
-        }
-        __syncthreads();
-    }
-    if (threadIdx.x == 0) {
-        output[0].value = values[0];
-        output[0].index = indices[0];
-    }
-}
-
-__global__ void panelScalarKernel(
-    const float* matrix,
-    const float* work,
-    int ld,
-    int panel_begin,
-    int panel_columns,
-    int row,
-    int col,
-    float* output)
-{
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
-        output[0] = panelEntry(
-            matrix, work, ld, panel_begin, panel_columns, row, col);
-    }
-}
-
-__global__ void swapPreviousFactorRowsKernel(
+__device__ void swapLargePanelRowsAndColumns(
     float* matrix,
-    int ld,
-    int step,
-    int lhs,
-    int rhs)
-{
-    const int col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (col < step) {
-        const float value = matrix[lhs + col * ld];
-        matrix[lhs + col * ld] = matrix[rhs + col * ld];
-        matrix[rhs + col * ld] = value;
-    }
-}
-
-__global__ void swapTrailingColumnsKernel(
-    float* matrix,
-    int ld,
-    int order,
-    int step,
-    int lhs,
-    int rhs)
-{
-    const int row = step + blockIdx.x * blockDim.x + threadIdx.x;
-    if (row < order) {
-        const float value = matrix[row + lhs * ld];
-        matrix[row + lhs * ld] = matrix[row + rhs * ld];
-        matrix[row + rhs * ld] = value;
-    }
-}
-
-__global__ void swapTrailingRowsKernel(
-    float* matrix,
-    int ld,
-    int order,
-    int step,
-    int lhs,
-    int rhs)
-{
-    const int col = step + blockIdx.x * blockDim.x + threadIdx.x;
-    if (col < order) {
-        const float value = matrix[lhs + col * ld];
-        matrix[lhs + col * ld] = matrix[rhs + col * ld];
-        matrix[rhs + col * ld] = value;
-    }
-}
-
-__global__ void swapIdsAndWorkRowsKernel(
-    int* ids,
     float* work,
     int ld,
     int panel_columns,
+    int step,
     int lhs,
-    int rhs)
+    int rhs,
+    int* ids)
 {
+    restrictedSymmetricSwapBlock(matrix, ld, ld, step, lhs, rhs, ids);
+    if (lhs == rhs) {
+        return;
+    }
     for (int col = threadIdx.x; col < panel_columns; col += blockDim.x) {
         const float value = work[lhs + col * ld];
         work[lhs + col * ld] = work[rhs + col * ld];
         work[rhs + col * ld] = value;
     }
+    __syncthreads();
+}
+
+__global__ void factorLargePanelControlKernel(
+    float* matrix,
+    float* work,
+    int* ids,
+    int* pivot_size,
+    int order,
+    int panel_begin,
+    int initial_active_end,
+    int delay_first,
+    int panel_capacity,
+    float gamma,
+    float absolute_tolerance,
+    float relative_tolerance,
+    float two_by_two_tolerance,
+    DeviceLargePanelState* output)
+{
+    __shared__ float reduction_values[256];
+    __shared__ int reduction_indices[256];
+    __shared__ int step;
+    __shared__ int active_end;
+    __shared__ int panel_columns;
+    __shared__ int decision;
+    __shared__ int pivot_row;
+    __shared__ int one_by_one;
+    __shared__ int two_by_two;
+    __shared__ float diagonal_value;
+    __shared__ float column_maximum;
+    __shared__ float tolerance;
+    __shared__ float pivot_a;
+    __shared__ float pivot_b;
+    __shared__ float pivot_c;
+
     if (threadIdx.x == 0) {
-        const int id = ids[lhs];
-        ids[lhs] = ids[rhs];
-        ids[rhs] = id;
+        step = panel_begin;
+        active_end = initial_active_end;
+        panel_columns = 0;
+        one_by_one = 0;
+        two_by_two = 0;
     }
-}
+    __syncthreads();
 
-__global__ void panelStoreOneByOneKernel(
-    float* matrix,
-    float* work,
-    int ld,
-    int panel_begin,
-    int panel_columns,
-    int step,
-    float diagonal)
-{
-    const int row = step + blockIdx.x * blockDim.x + threadIdx.x;
-    if (row >= ld) {
-        return;
-    }
-    const float value = panelEntry(
-        matrix, work, ld, panel_begin, panel_columns, row, step);
-    if (row == step) {
-        matrix[row + step * ld] = diagonal;
-        work[row + panel_columns * ld] = diagonal;
-    } else {
-        matrix[row + step * ld] = value / diagonal;
-        work[row + panel_columns * ld] = value;
-    }
-}
-
-__global__ void panelStoreTwoByTwoKernel(
-    float* matrix,
-    float* work,
-    int ld,
-    int panel_begin,
-    int panel_columns,
-    int step,
-    float a,
-    float b,
-    float c)
-{
-    const int row = step + blockIdx.x * blockDim.x + threadIdx.x;
-    if (row >= ld) {
-        return;
-    }
-    if (row == step) {
-        matrix[step + step * ld] = a;
-        work[step + panel_columns * ld] = a;
-        work[step + (panel_columns + 1) * ld] = b;
-        return;
-    }
-    if (row == step + 1) {
-        matrix[row + step * ld] = b;
-        matrix[row + row * ld] = c;
-        work[row + panel_columns * ld] = b;
-        work[row + (panel_columns + 1) * ld] = c;
-        return;
+    if (delay_first != 0 && step < active_end) {
+        swapLargePanelRowsAndColumns(
+            matrix, work, order, 0, step, step, active_end - 1, ids);
+        if (threadIdx.x == 0) {
+            --active_end;
+        }
+        __syncthreads();
     }
 
-    const float first = panelEntry(
-        matrix, work, ld, panel_begin, panel_columns, row, step);
-    const float second = panelEntry(
-        matrix, work, ld, panel_begin, panel_columns, row, step + 1);
-    const float determinant = a * c - b * b;
-    matrix[row + step * ld] = (first * c - second * b) / determinant;
-    matrix[row + (step + 1) * ld] = (second * a - first * b) / determinant;
-    work[row + panel_columns * ld] = first;
-    work[row + (panel_columns + 1) * ld] = second;
+    while (step < active_end && panel_columns < panel_capacity) {
+        if (threadIdx.x == 0) {
+            diagonal_value = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step, step);
+            decision = -1;
+            pivot_row = step;
+        }
+        __syncthreads();
+
+        const DeviceMaxPair column_max = blockPanelColumnMaximum(
+            matrix, work, order, panel_begin, panel_columns, step,
+            reduction_values, reduction_indices);
+        if (threadIdx.x == 0) {
+            column_maximum = column_max.value;
+            pivot_row = column_max.index;
+            const float diagonal = absf(diagonal_value);
+            const float scale = fmaxf(diagonal, column_maximum);
+            tolerance = fmaxf(absolute_tolerance, relative_tolerance * scale);
+            if (column_maximum <= tolerance) {
+                decision = diagonal > tolerance ? 1 : 0;
+            } else if (diagonal >= gamma * column_maximum) {
+                decision = 1;
+                pivot_row = step;
+            } else if (pivot_row >= active_end) {
+                // A non-fully-summed row cannot participate in the BK row test.
+                decision = 0;
+            }
+        }
+        __syncthreads();
+
+        if (decision < 0) {
+            const DeviceMaxPair row_max = blockPanelRowMaximum(
+                matrix, work, order, panel_begin, panel_columns,
+                pivot_row, step, reduction_values, reduction_indices);
+            if (threadIdx.x == 0) {
+                const float sigma = row_max.value;
+                const float diagonal = absf(diagonal_value);
+                const float candidate_diagonal = absf(panelEntry(
+                    matrix, work, order, panel_begin, panel_columns,
+                    pivot_row, pivot_row));
+                if (sigma <= tolerance ||
+                    diagonal >= gamma * column_maximum * column_maximum / sigma) {
+                    decision = 1;
+                    pivot_row = step;
+                } else if (candidate_diagonal >= gamma * sigma) {
+                    decision = 1;
+                } else if (step + 1 < active_end) {
+                    pivot_a = diagonal_value;
+                    pivot_b = panelEntry(
+                        matrix, work, order, panel_begin, panel_columns,
+                        pivot_row, step);
+                    pivot_c = panelEntry(
+                        matrix, work, order, panel_begin, panel_columns,
+                        pivot_row, pivot_row);
+                    const float determinant = pivot_a * pivot_c - pivot_b * pivot_b;
+                    const float norm = fmaxf(
+                        absf(pivot_a) + absf(pivot_b),
+                        absf(pivot_b) + absf(pivot_c));
+                    decision = absf(determinant) >
+                                   two_by_two_tolerance * norm * norm &&
+                               absf(determinant) > tolerance * tolerance
+                        ? 2 : 0;
+                } else {
+                    decision = 0;
+                }
+            }
+            __syncthreads();
+        }
+
+        if (decision == 0) {
+            // Preserve delayed-pivot semantics: flush a non-empty panel first.
+            if (panel_columns != 0) {
+                break;
+            }
+            swapLargePanelRowsAndColumns(
+                matrix, work, order, 0, step, step, active_end - 1, ids);
+            if (threadIdx.x == 0) {
+                --active_end;
+            }
+            __syncthreads();
+            continue;
+        }
+
+        if (panel_columns + decision > panel_capacity) {
+            break;
+        }
+
+        if (decision == 1) {
+            swapLargePanelRowsAndColumns(
+                matrix, work, order, panel_columns, step, step, pivot_row, ids);
+            if (threadIdx.x == 0) {
+                pivot_a = panelEntry(
+                    matrix, work, order, panel_begin, panel_columns, step, step);
+            }
+            __syncthreads();
+
+            for (int row = step + threadIdx.x; row < order; row += blockDim.x) {
+                const float value = panelEntry(
+                    matrix, work, order, panel_begin, panel_columns, row, step);
+                if (row == step) {
+                    matrix[row + step * order] = pivot_a;
+                    work[row + panel_columns * order] = pivot_a;
+                } else {
+                    matrix[row + step * order] = value / pivot_a;
+                    work[row + panel_columns * order] = value;
+                }
+            }
+            __syncthreads();
+            if (threadIdx.x == 0) {
+                pivot_size[step] = 1;
+                ++step;
+                ++panel_columns;
+                ++one_by_one;
+            }
+            __syncthreads();
+            continue;
+        }
+
+        swapLargePanelRowsAndColumns(
+            matrix, work, order, panel_columns, step, step + 1, pivot_row, ids);
+        if (threadIdx.x == 0) {
+            pivot_a = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step, step);
+            pivot_b = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step + 1, step);
+            pivot_c = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step + 1, step + 1);
+        }
+        __syncthreads();
+        const float determinant = pivot_a * pivot_c - pivot_b * pivot_b;
+        for (int row = step + 2 + threadIdx.x; row < order; row += blockDim.x) {
+            const float first = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, row, step);
+            const float second = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, row, step + 1);
+            matrix[row + step * order] =
+                (first * pivot_c - second * pivot_b) / determinant;
+            matrix[row + (step + 1) * order] =
+                (second * pivot_a - first * pivot_b) / determinant;
+            work[row + panel_columns * order] = first;
+            work[row + (panel_columns + 1) * order] = second;
+        }
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            matrix[step + step * order] = pivot_a;
+            matrix[step + 1 + step * order] = pivot_b;
+            matrix[step + 1 + (step + 1) * order] = pivot_c;
+            work[step + panel_columns * order] = pivot_a;
+            work[step + (panel_columns + 1) * order] = pivot_b;
+            work[step + 1 + panel_columns * order] = pivot_b;
+            work[step + 1 + (panel_columns + 1) * order] = pivot_c;
+        }
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            pivot_size[step] = 2;
+            pivot_size[step + 1] = 0;
+            step += 2;
+            panel_columns += 2;
+            ++two_by_two;
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        output->step = step;
+        output->active_end = active_end;
+        output->panel_columns = panel_columns;
+        output->one_by_one = one_by_one;
+        output->two_by_two = two_by_two;
+        output->delay_current =
+            step < active_end && panel_columns != 0 && decision == 0 ? 1 : 0;
+    }
 }
 
 __global__ void mirrorLowerToUpperKernel(float* matrix, int ld, int begin)
@@ -1538,82 +1609,6 @@ private:
         }
     }
 
-    DeviceMaxPair panelMaximum(
-        const FrontWork& front,
-        const DeviceBuffer<float>& work,
-        int panel_begin,
-        int panel_columns,
-        int step,
-        int active_end,
-        bool row_search,
-        int row,
-        DeviceBuffer<DeviceMaxPair>& partial,
-        DeviceBuffer<DeviceMaxPair>& result) const
-    {
-        const int count = std::max(1, active_end - step);
-        const int blocks = std::min(32, (count + 255) / 256);
-        if (row_search) {
-            panelRowMaxKernel<<<blocks, 256>>>(
-                front.values.get(), work.get(), front.order,
-                panel_begin, panel_columns, row, step, active_end, partial.get());
-        } else {
-            panelColumnMaxKernel<<<blocks, 256>>>(
-                front.values.get(), work.get(), front.order,
-                panel_begin, panel_columns, step, active_end, partial.get());
-        }
-        reduceMaxPairsKernel<<<1, 256>>>(partial.get(), blocks, result.get());
-        DeviceMaxPair host_result;
-        checkCuda(cudaMemcpy(
-                      &host_result, result.get(), sizeof(DeviceMaxPair),
-                      cudaMemcpyDeviceToHost),
-                  "download panel maximum");
-        return host_result;
-    }
-
-    float panelScalar(
-        const FrontWork& front,
-        const DeviceBuffer<float>& work,
-        int panel_begin,
-        int panel_columns,
-        int row,
-        int col,
-        DeviceBuffer<float>& scalar) const
-    {
-        panelScalarKernel<<<1, 1>>>(
-            front.values.get(), work.get(), front.order,
-            panel_begin, panel_columns, row, col, scalar.get());
-        float value = 0.0f;
-        checkCuda(cudaMemcpy(
-                      &value, scalar.get(), sizeof(float), cudaMemcpyDeviceToHost),
-                  "download panel scalar");
-        return value;
-    }
-
-    void swapLargeFront(
-        FrontWork& front,
-        DeviceBuffer<float>& work,
-        int panel_columns,
-        int step,
-        int lhs,
-        int rhs) const
-    {
-        if (lhs == rhs) {
-            return;
-        }
-        if (step != 0) {
-            swapPreviousFactorRowsKernel<<<(step + 255) / 256, 256>>>(
-                front.values.get(), front.order, step, lhs, rhs);
-        }
-        const int trailing = front.order - step;
-        swapTrailingColumnsKernel<<<(trailing + 255) / 256, 256>>>(
-            front.values.get(), front.order, front.order, step, lhs, rhs);
-        swapTrailingRowsKernel<<<(trailing + 255) / 256, 256>>>(
-            front.values.get(), front.order, front.order, step, lhs, rhs);
-        swapIdsAndWorkRowsKernel<<<1, 256>>>(
-            front.ids.get(), work.get(), front.order, panel_columns, lhs, rhs);
-        checkCuda(cudaGetLastError(), "swap large-front rows and columns");
-    }
-
     void flushLargePanel(
         FrontWork& front,
         DeviceBuffer<float>& work,
@@ -1649,145 +1644,54 @@ private:
     {
         DeviceBuffer<float> work(
             static_cast<std::size_t>(front.order) * options_.panel_size);
-        DeviceBuffer<DeviceMaxPair> partial(32);
-        DeviceBuffer<DeviceMaxPair> max_result(1);
-        DeviceBuffer<float> scalar(1);
+        DeviceBuffer<DeviceLargePanelState> device_state(1);
         checkCuda(cudaMemset(
                       work.get(), 0,
                       static_cast<std::size_t>(front.order) * options_.panel_size *
                           sizeof(float)),
                   "clear large-panel work array");
 
-        std::vector<int> pivot_sizes(static_cast<std::size_t>(front.candidate_count), 0);
         int step = 0;
         int active_end = front.candidate_count;
-        int panel_begin = 0;
-        int panel_columns = 0;
+        int delay_first = 0;
 
         while (step < active_end) {
-            if (panel_columns >= options_.panel_size) {
-                flushLargePanel(front, work, panel_begin, step);
-                panel_begin = step;
-                panel_columns = 0;
-            }
-
-            const float diagonal_value = panelScalar(
-                front, work, panel_begin, panel_columns, step, step, scalar);
-            // 更新行和已延迟行不能被选作主元，但其耦合仍决定当前主元是否稳定。
-            const DeviceMaxPair column_max = panelMaximum(
-                front, work, panel_begin, panel_columns, step, front.order,
-                false, step, partial, max_result);
-            const float diagonal = std::fabs(diagonal_value);
-            const float local_scale = std::max(diagonal, column_max.value);
-            const float tolerance = std::max(
+            const int panel_begin = step;
+            factorLargePanelControlKernel<<<1, 256>>>(
+                front.values.get(), work.get(), front.ids.get(),
+                front.pivot_size.get(), front.order, panel_begin, active_end,
+                delay_first, options_.panel_size, options_.bunch_kaufman_gamma,
                 options_.absolute_pivot_tolerance,
-                options_.relative_pivot_tolerance * local_scale);
+                options_.relative_pivot_tolerance,
+                options_.two_by_two_tolerance, device_state.get());
+            checkCuda(cudaGetLastError(), "launch GPU-resident large BK panel");
 
-            int pivot_order = 0;
-            int pivot_row = step;
-            if (column_max.value <= tolerance) {
-                pivot_order = diagonal > tolerance ? 1 : 0;
-            } else if (diagonal >=
-                       options_.bunch_kaufman_gamma * column_max.value) {
-                pivot_order = 1;
-            } else if (column_max.index >= active_end) {
-                // The BK row test requires a fully-summed pivot candidate.
-                pivot_order = 0;
-            } else {
-                const DeviceMaxPair row_max = panelMaximum(
-                    front, work, panel_begin, panel_columns, step, front.order,
-                    true, column_max.index, partial, max_result);
-                const float sigma = row_max.value;
-                const float candidate_diagonal = std::fabs(panelScalar(
-                    front, work, panel_begin, panel_columns,
-                    column_max.index, column_max.index, scalar));
-                if (sigma <= tolerance ||
-                    diagonal >= options_.bunch_kaufman_gamma *
-                                    column_max.value * column_max.value / sigma) {
-                    pivot_order = 1;
-                } else if (candidate_diagonal >=
-                           options_.bunch_kaufman_gamma * sigma) {
-                    pivot_order = 1;
-                    pivot_row = column_max.index;
-                } else if (step + 1 < active_end) {
-                    const float a = diagonal_value;
-                    const float b = panelScalar(
-                        front, work, panel_begin, panel_columns,
-                        column_max.index, step, scalar);
-                    const float c = panelScalar(
-                        front, work, panel_begin, panel_columns,
-                        column_max.index, column_max.index, scalar);
-                    const float determinant = a * c - b * b;
-                    const float norm = std::max(
-                        std::fabs(a) + std::fabs(b),
-                        std::fabs(b) + std::fabs(c));
-                    if (std::fabs(determinant) >
-                            options_.two_by_two_tolerance * norm * norm &&
-                        std::fabs(determinant) > tolerance * tolerance) {
-                        pivot_order = 2;
-                        pivot_row = column_max.index;
-                    }
-                }
+            DeviceLargePanelState host_state;
+            checkCuda(cudaMemcpy(
+                          &host_state, device_state.get(), sizeof(host_state),
+                          cudaMemcpyDeviceToHost),
+                      "download large-panel summary");
+            if (host_state.step < panel_begin ||
+                host_state.active_end > active_end ||
+                host_state.active_end < host_state.step ||
+                host_state.panel_columns != host_state.step - panel_begin ||
+                (host_state.delay_current != 0 &&
+                 host_state.delay_current != 1)) {
+                throw std::runtime_error("invalid GPU large-panel state");
             }
 
-            if (pivot_order == 0) {
-                // 文档要求延迟发生时立刻结束 panel，先把所有更新写回 A。
+            step = host_state.step;
+            active_end = host_state.active_end;
+            front.one_by_one += host_state.one_by_one;
+            front.two_by_two += host_state.two_by_two;
+            delay_first = host_state.delay_current;
+            if (host_state.panel_columns != 0) {
                 flushLargePanel(front, work, panel_begin, step);
-                panel_begin = step;
-                panel_columns = 0;
-                swapLargeFront(
-                    front, work, 0, step, step, active_end - 1);
-                --active_end;
-                continue;
             }
-
-            if (panel_columns + pivot_order > options_.panel_size) {
-                flushLargePanel(front, work, panel_begin, step);
-                panel_begin = step;
-                panel_columns = 0;
-                continue;
-            }
-
-            if (pivot_order == 1) {
-                swapLargeFront(
-                    front, work, panel_columns, step, step, pivot_row);
-                const float d = panelScalar(
-                    front, work, panel_begin, panel_columns, step, step, scalar);
-                panelStoreOneByOneKernel<<<(front.order - step + 255) / 256, 256>>>(
-                    front.values.get(), work.get(), front.order,
-                    panel_begin, panel_columns, step, d);
-                pivot_sizes[step] = 1;
-                ++step;
-                ++panel_columns;
-                ++front.one_by_one;
-            } else {
-                swapLargeFront(
-                    front, work, panel_columns, step, step + 1, pivot_row);
-                const float a = panelScalar(
-                    front, work, panel_begin, panel_columns, step, step, scalar);
-                const float b = panelScalar(
-                    front, work, panel_begin, panel_columns, step + 1, step, scalar);
-                const float c = panelScalar(
-                    front, work, panel_begin, panel_columns, step + 1, step + 1, scalar);
-                panelStoreTwoByTwoKernel<<<(front.order - step + 255) / 256, 256>>>(
-                    front.values.get(), work.get(), front.order,
-                    panel_begin, panel_columns, step, a, b, c);
-                pivot_sizes[step] = 2;
-                pivot_sizes[step + 1] = 0;
-                step += 2;
-                panel_columns += 2;
-                ++front.two_by_two;
-            }
-            checkCuda(cudaGetLastError(), "factor large BK panel pivot");
         }
 
-        flushLargePanel(front, work, panel_begin, step);
         front.accepted = step;
         front.delayed = front.candidate_count - step;
-        checkCuda(cudaMemcpy(
-                      front.pivot_size.get(), pivot_sizes.data(),
-                      pivot_sizes.size() * sizeof(int), cudaMemcpyHostToDevice),
-                  "upload large-front pivot sizes");
     }
 
     void finalizeFront(FrontWork& front)
