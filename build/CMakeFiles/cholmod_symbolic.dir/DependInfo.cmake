@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/master/supernodal_gpu/src/cholmod_symbolic.cpp" "CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o" "gcc" "CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o.d"
+  "/home/master/supernodal_gpu/supergpu/src/cholmod_symbolic.cpp" "CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o" "gcc" "CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

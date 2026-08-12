@@ -53,10 +53,10 @@ RM = /home/master/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/master/supernodal_gpu
+CMAKE_SOURCE_DIR = /home/master/supernodal_gpu/supergpu
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/master/supernodal_gpu/build
+CMAKE_BINARY_DIR = /home/master/supernodal_gpu/supergpu/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/amd_ordering.dir/depend.make
@@ -73,18 +73,18 @@ CMakeFiles/amd_ordering.dir/codegen:
 .PHONY : CMakeFiles/amd_ordering.dir/codegen
 
 CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o: CMakeFiles/amd_ordering.dir/flags.make
-CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o: /home/master/supernodal_gpu/src/amd_ordering.cpp
+CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o: /home/master/supernodal_gpu/supergpu/src/amd_ordering.cpp
 CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o: CMakeFiles/amd_ordering.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/master/supernodal_gpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o -MF CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o.d -o CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o -c /home/master/supernodal_gpu/src/amd_ordering.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/master/supernodal_gpu/supergpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o -MF CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o.d -o CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o -c /home/master/supernodal_gpu/supergpu/src/amd_ordering.cpp
 
 CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/master/supernodal_gpu/src/amd_ordering.cpp > CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.i
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/master/supernodal_gpu/supergpu/src/amd_ordering.cpp > CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.i
 
 CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/master/supernodal_gpu/src/amd_ordering.cpp -o CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.s
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/master/supernodal_gpu/supergpu/src/amd_ordering.cpp -o CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.s
 
 # Object files for target amd_ordering
 amd_ordering_OBJECTS = \
@@ -96,7 +96,7 @@ amd_ordering_EXTERNAL_OBJECTS =
 libamd_ordering.a: CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o
 libamd_ordering.a: CMakeFiles/amd_ordering.dir/build.make
 libamd_ordering.a: CMakeFiles/amd_ordering.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/master/supernodal_gpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX static library libamd_ordering.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/master/supernodal_gpu/supergpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX static library libamd_ordering.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/amd_ordering.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/amd_ordering.dir/link.txt --verbose=$(VERBOSE)
 
@@ -109,6 +109,6 @@ CMakeFiles/amd_ordering.dir/clean:
 .PHONY : CMakeFiles/amd_ordering.dir/clean
 
 CMakeFiles/amd_ordering.dir/depend:
-	cd /home/master/supernodal_gpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu /home/master/supernodal_gpu /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build/CMakeFiles/amd_ordering.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /home/master/supernodal_gpu/supergpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build/CMakeFiles/amd_ordering.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/amd_ordering.dir/depend
 

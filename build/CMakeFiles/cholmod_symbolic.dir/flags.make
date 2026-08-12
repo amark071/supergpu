@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/master/supernodal_gpu/include -I/usr/local/include/suitesparse -isystem /usr/local/cuda-12.6/targets/x86_64-linux/include
+CXX_INCLUDES = -I/home/master/supernodal_gpu/supergpu/include -I/usr/local/include/suitesparse -isystem /usr/local/cuda-12.6/targets/x86_64-linux/include
 
-CXX_FLAGS = -Wall -Wextra -Wpedantic
+CXX_FLAGS = -O3 -DNDEBUG -Wall -Wextra -Wpedantic
 

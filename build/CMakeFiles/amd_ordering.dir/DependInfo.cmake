@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/master/supernodal_gpu/src/amd_ordering.cpp" "CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o" "gcc" "CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o.d"
+  "/home/master/supernodal_gpu/supergpu/src/amd_ordering.cpp" "CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o" "gcc" "CMakeFiles/amd_ordering.dir/src/amd_ordering.cpp.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.

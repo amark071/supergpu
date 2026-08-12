@@ -53,10 +53,10 @@ RM = /home/master/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/master/supernodal_gpu
+CMAKE_SOURCE_DIR = /home/master/supernodal_gpu/supergpu
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/master/supernodal_gpu/build
+CMAKE_BINARY_DIR = /home/master/supernodal_gpu/supergpu/build
 
 # Utility rule file for run.
 
@@ -67,7 +67,7 @@ include CMakeFiles/run.dir/compiler_depend.make
 include CMakeFiles/run.dir/progress.make
 
 CMakeFiles/run: supernodal_gpu
-	cd /home/master/supernodal_gpu && /home/master/bin/cmake -DEXECUTABLE=/home/master/supernodal_gpu/build/supernodal_gpu -DWORKING_DIRECTORY=/home/master/supernodal_gpu -DLOG_FILE=/home/master/supernodal_gpu/build/supernodal_gpu.log -P /home/master/supernodal_gpu/build/RunAndLog.cmake
+	cd /home/master/supernodal_gpu/supergpu && /home/master/bin/cmake -DEXECUTABLE=/home/master/supernodal_gpu/supergpu/build/supernodal_gpu -DWORKING_DIRECTORY=/home/master/supernodal_gpu/supergpu -DLOG_FILE=/home/master/supernodal_gpu/supergpu/build/supernodal_gpu.log -P /home/master/supernodal_gpu/supergpu/build/RunAndLog.cmake
 
 CMakeFiles/run.dir/codegen:
 .PHONY : CMakeFiles/run.dir/codegen
@@ -85,6 +85,6 @@ CMakeFiles/run.dir/clean:
 .PHONY : CMakeFiles/run.dir/clean
 
 CMakeFiles/run.dir/depend:
-	cd /home/master/supernodal_gpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu /home/master/supernodal_gpu /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build/CMakeFiles/run.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /home/master/supernodal_gpu/supergpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build/CMakeFiles/run.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/run.dir/depend
 

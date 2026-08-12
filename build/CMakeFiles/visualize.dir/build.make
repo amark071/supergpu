@@ -53,10 +53,10 @@ RM = /home/master/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/master/supernodal_gpu
+CMAKE_SOURCE_DIR = /home/master/supernodal_gpu/supergpu
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/master/supernodal_gpu/build
+CMAKE_BINARY_DIR = /home/master/supernodal_gpu/supergpu/build
 
 # Utility rule file for visualize.
 
@@ -67,7 +67,7 @@ include CMakeFiles/visualize.dir/compiler_depend.make
 include CMakeFiles/visualize.dir/progress.make
 
 CMakeFiles/visualize:
-	cd /home/master/supernodal_gpu && /home/master/anaconda3/bin/python3.13 /home/master/supernodal_gpu/utils/plot_symbolic_analysis.py --input-dir /home/master/supernodal_gpu/build/visualization --output-dir /home/master/supernodal_gpu/build/visualization
+	cd /home/master/supernodal_gpu/supergpu && /home/master/anaconda3/bin/python3.13 /home/master/supernodal_gpu/supergpu/utils/plot_symbolic_analysis.py --input-dir /home/master/supernodal_gpu/supergpu/build/visualization --output-dir /home/master/supernodal_gpu/supergpu/build/visualization
 
 CMakeFiles/visualize.dir/codegen:
 .PHONY : CMakeFiles/visualize.dir/codegen
@@ -85,6 +85,6 @@ CMakeFiles/visualize.dir/clean:
 .PHONY : CMakeFiles/visualize.dir/clean
 
 CMakeFiles/visualize.dir/depend:
-	cd /home/master/supernodal_gpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu /home/master/supernodal_gpu /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build/CMakeFiles/visualize.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /home/master/supernodal_gpu/supergpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build/CMakeFiles/visualize.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/visualize.dir/depend
 

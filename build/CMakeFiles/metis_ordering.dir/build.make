@@ -53,10 +53,10 @@ RM = /home/master/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/master/supernodal_gpu
+CMAKE_SOURCE_DIR = /home/master/supernodal_gpu/supergpu
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/master/supernodal_gpu/build
+CMAKE_BINARY_DIR = /home/master/supernodal_gpu/supergpu/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/metis_ordering.dir/depend.make
@@ -73,18 +73,18 @@ CMakeFiles/metis_ordering.dir/codegen:
 .PHONY : CMakeFiles/metis_ordering.dir/codegen
 
 CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o: CMakeFiles/metis_ordering.dir/flags.make
-CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o: /home/master/supernodal_gpu/src/metis_ordering.cpp
+CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o: /home/master/supernodal_gpu/supergpu/src/metis_ordering.cpp
 CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o: CMakeFiles/metis_ordering.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/master/supernodal_gpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o -MF CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o.d -o CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o -c /home/master/supernodal_gpu/src/metis_ordering.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/master/supernodal_gpu/supergpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o -MF CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o.d -o CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o -c /home/master/supernodal_gpu/supergpu/src/metis_ordering.cpp
 
 CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/master/supernodal_gpu/src/metis_ordering.cpp > CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.i
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/master/supernodal_gpu/supergpu/src/metis_ordering.cpp > CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.i
 
 CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/master/supernodal_gpu/src/metis_ordering.cpp -o CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.s
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/master/supernodal_gpu/supergpu/src/metis_ordering.cpp -o CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.s
 
 # Object files for target metis_ordering
 metis_ordering_OBJECTS = \
@@ -96,7 +96,7 @@ metis_ordering_EXTERNAL_OBJECTS =
 libmetis_ordering.a: CMakeFiles/metis_ordering.dir/src/metis_ordering.cpp.o
 libmetis_ordering.a: CMakeFiles/metis_ordering.dir/build.make
 libmetis_ordering.a: CMakeFiles/metis_ordering.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/master/supernodal_gpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX static library libmetis_ordering.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/master/supernodal_gpu/supergpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX static library libmetis_ordering.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/metis_ordering.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/metis_ordering.dir/link.txt --verbose=$(VERBOSE)
 
@@ -109,6 +109,6 @@ CMakeFiles/metis_ordering.dir/clean:
 .PHONY : CMakeFiles/metis_ordering.dir/clean
 
 CMakeFiles/metis_ordering.dir/depend:
-	cd /home/master/supernodal_gpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu /home/master/supernodal_gpu /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build/CMakeFiles/metis_ordering.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /home/master/supernodal_gpu/supergpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build/CMakeFiles/metis_ordering.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/metis_ordering.dir/depend
 

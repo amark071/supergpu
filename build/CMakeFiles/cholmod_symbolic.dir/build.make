@@ -53,10 +53,10 @@ RM = /home/master/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/master/supernodal_gpu
+CMAKE_SOURCE_DIR = /home/master/supernodal_gpu/supergpu
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/master/supernodal_gpu/build
+CMAKE_BINARY_DIR = /home/master/supernodal_gpu/supergpu/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/cholmod_symbolic.dir/depend.make
@@ -73,18 +73,18 @@ CMakeFiles/cholmod_symbolic.dir/codegen:
 .PHONY : CMakeFiles/cholmod_symbolic.dir/codegen
 
 CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o: CMakeFiles/cholmod_symbolic.dir/flags.make
-CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o: /home/master/supernodal_gpu/src/cholmod_symbolic.cpp
+CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o: /home/master/supernodal_gpu/supergpu/src/cholmod_symbolic.cpp
 CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o: CMakeFiles/cholmod_symbolic.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/master/supernodal_gpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o -MF CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o.d -o CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o -c /home/master/supernodal_gpu/src/cholmod_symbolic.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/master/supernodal_gpu/supergpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o"
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o -MF CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o.d -o CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o -c /home/master/supernodal_gpu/supergpu/src/cholmod_symbolic.cpp
 
 CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/master/supernodal_gpu/src/cholmod_symbolic.cpp > CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.i
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/master/supernodal_gpu/supergpu/src/cholmod_symbolic.cpp > CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.i
 
 CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/master/supernodal_gpu/src/cholmod_symbolic.cpp -o CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.s
+	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/master/supernodal_gpu/supergpu/src/cholmod_symbolic.cpp -o CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.s
 
 # Object files for target cholmod_symbolic
 cholmod_symbolic_OBJECTS = \
@@ -96,7 +96,7 @@ cholmod_symbolic_EXTERNAL_OBJECTS =
 libcholmod_symbolic.a: CMakeFiles/cholmod_symbolic.dir/src/cholmod_symbolic.cpp.o
 libcholmod_symbolic.a: CMakeFiles/cholmod_symbolic.dir/build.make
 libcholmod_symbolic.a: CMakeFiles/cholmod_symbolic.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/master/supernodal_gpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX static library libcholmod_symbolic.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/master/supernodal_gpu/supergpu/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX static library libcholmod_symbolic.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/cholmod_symbolic.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/cholmod_symbolic.dir/link.txt --verbose=$(VERBOSE)
 
@@ -109,6 +109,6 @@ CMakeFiles/cholmod_symbolic.dir/clean:
 .PHONY : CMakeFiles/cholmod_symbolic.dir/clean
 
 CMakeFiles/cholmod_symbolic.dir/depend:
-	cd /home/master/supernodal_gpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu /home/master/supernodal_gpu /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build /home/master/supernodal_gpu/build/CMakeFiles/cholmod_symbolic.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /home/master/supernodal_gpu/supergpu/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build /home/master/supernodal_gpu/supergpu/build/CMakeFiles/cholmod_symbolic.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/cholmod_symbolic.dir/depend
 

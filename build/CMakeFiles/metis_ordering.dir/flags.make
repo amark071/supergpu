@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/master/supernodal_gpu/include
+CXX_INCLUDES = -I/home/master/supernodal_gpu/supergpu/include
 
-CXX_FLAGS = -Wall -Wextra -Wpedantic
+CXX_FLAGS = -O3 -DNDEBUG -Wall -Wextra -Wpedantic
 
