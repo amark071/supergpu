@@ -5,7 +5,7 @@
 
 在超节点方法中，需要把单个超节点的主元块作为稠密矩阵进行 $LU$ 或 $L(D)L^T$ 分解。
 按照列主元方法，算法逐列选择主元并进行更新。如果某一列待分解的部分全为零，就无法选出列主元。
-$LAPACK$ 的 \code{dgetrf} 函数在大量的求解器中担负这个责任,
+LAPACK 的 \code{dgetrf} 函数在大量的求解器中担负这个责任,
 但当其遇到上述问题的时候则会跳过该零列，继续分解后续列并在最后报告错误；
 这种处理不能满足我们对不正定但是满秩可分解矩阵的分解流程的需要。
 
@@ -39,50 +39,78 @@ $LAPACK$ 的 \code{dgetrf} 函数在大量的求解器中担负这个责任,
   \item 对角块之外的行列来自与对角块中的行列相耦合的变量。
 \end{itemize}
 
-该方法采用 right-looking 列主元方法和 KJI 更新方法。
+我们针对上述问题提出了两种基于动态延迟主元的波前矩阵分解Kernel，
+分别用于处理对称和非对称稠密矩阵。
 
 \section{非对称稠密矩阵的延迟主元 LU 方法}
-\subsection{Step 1：分解 Fully Summed 块}
+\subsection{分解 Fully Summed 块}
 
-首先单独考虑 Fully Summed 块的分解。已经分解的部分包含 $L_{EE}$、$U_{EE}$、$L_{DE}$ 和 $U_{ED}$，接下来需要继续分解 Unfactored Block。自然的处理过程是：
+首先单独考虑 Fully Summed 块的分解。
+已经分解更新的部分包含 $L_{EE}$、$U_{EE}$、$L_{DE}$ 和 $U_{ED}$，
+接下来需要继续分解 Unfactored Block。一个朴素的想法是：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=0.82cm,y=0.82cm,font=\small]
+  % 分解当前主元之前
+  \begin{scope}
+    \draw[MumpsRed,thick] (0,4) rectangle (2,6);
+    \draw[MumpsRed,thick] (0,4)--(6,4);
+    \draw[MumpsRed,thick] (2,0)--(2,6);
+    \draw[thick] (0,0) rectangle (6,6);
+    \draw[MumpsRed,dashed] (0,6)--(2,4);
+    \node at (1.42,5.30) {$U_{EE}$};
+    \node at (0.66,4.66) {$L_{EE}$};
+    \node at (4,5) {$U_{ED}$};
+    \node at (1,2) {$L_{DE}$};
+    \node[align=center] at (4,2) {Unfactored\\Block};
+  \end{scope}
+
+  % 接受一个主元之后
+  \begin{scope}[xshift=7.0cm]
+    \draw[MumpsRed,thick] (0,4) rectangle (2,6);
+    \draw[MumpsRed,thick] (0,4)--(6,4);
+    \draw[MumpsRed,thick] (2,0)--(2,6);
+    \draw[thick] (0,0) rectangle (6,6);
+    \draw[MumpsRed,dashed] (0,6)--(2,4);
+    \node at (1.42,5.30) {$U_{EE}$};
+    \node at (0.66,4.66) {$L_{EE}$};
+    \node at (4,5) {$U_{ED}$};
+    \node at (1,2) {$L_{DE}$};
+
+    \draw (2.9,0)--(2.9,4);
+    \draw (2,3.1)--(6,3.1);
+    \node at (2.45,3.55) {$P$};
+    \node at (4.45,3.55) {$U_P$};
+    \node at (2.45,1.55) {$L_P$};
+    \node at (4.45,1.55) {$\cdots$};
+  \end{scope}
+\end{tikzpicture}
+\caption{非对称 Fully Summed 块的一步主元分解过程}
+\label{fig:unsym-pivot-step}
+\end{figure}
 
 \begin{enumerate}
-  \item 首先选择列主元；如果能够选到合适的列主元，则进行行交换 $P$，并用该元素作为主元；
-  \item 如果不能选到合适的列主元，则在整个活动子块中选择主元。此时需要同时进行行、列交换，将活动子块的全局最大元素置换到当前主元位置，根据该主元计算 $L_p$，再更新 $U_p$ 和右下角子块。
+  \item 首先选择列主元（即该列待更新的行中最大元素）：如果能够选到合适的列主元，则进行行交换 $P$，并用该元素作为主元；
+  \item 如果不能选到合适的列主元，则在整个活动子块中选择主元（即待更新的子块中最大的元素）：此时需要同时进行行、列交换，将活动子块的全局最大元素置换到当前主元位置，根据该主元计算 $L_p$，再更新 $U_p$ 和右下角子块。
 \end{enumerate}
 
 \subsubsection{列主元接受阈值}
 
 设第 $k$ 步尚未分解的活动子块为
-
-\[
-S^{(k)}=\left[s_{ij}^{(k)}\right]_{i,j=k}^{f},
-\]
-
+$S^{(k)}=\left[s_{ij}^{(k)}\right]_{i,j=k}^{f}$，
 其中 $f$ 为 Fully Summed 块的阶数，$\tau\in(0,1)$ 为主元接受阈值。
 
 列主元只搜索活动子块的第 $k$ 列，候选主元所在行为
-
-\[
-p_k=\underset{k\le i\le f}{\operatorname{argmax}}
+$$p_k=\underset{k\le i\le f}{\operatorname{argmax}}
       \left|s_{ik}^{(k)}\right|,
 \qquad
-\alpha_k=\left|s_{p_k k}^{(k)}\right|.
-\]
-
+\alpha_k=\left|s_{p_k k}^{(k)}\right|.$$
 记活动子块中的最大元素为
-
-\[
-\beta_k=\left\|S^{(k)}\right\|_{\max}
-=\max_{k\le i,j\le f}\left|s_{ij}^{(k)}\right|.
-\]
-
+$\beta_k=\left\|S^{(k)}\right\|_{\max}
+=\max_{k\le i,j\le f}\left|s_{ij}^{(k)}\right|$，
 当
-
-\[
-\alpha_k\ge\tau\beta_k
-\]
-
+$\alpha_k\ge\tau\beta_k$
 时，认为列主元足够稳定。用行置换矩阵 $P_k$ 交换第 $k$ 行和第 $p_k$ 行：
 
 \[

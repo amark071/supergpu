@@ -4,14 +4,16 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -80,15 +82,20 @@ bool asynchronousMemoryPoolEnabled()
 template <typename T>
 class DeviceBuffer {
 public:
-    DeviceBuffer() : data_(0), size_(0) {}
-    explicit DeviceBuffer(std::size_t size) : data_(0), size_(0) { allocate(size); }
+    DeviceBuffer() : data_(0), size_(0), stream_(0) {}
+    explicit DeviceBuffer(std::size_t size, cudaStream_t stream = 0)
+        : data_(0), size_(0), stream_(stream)
+    {
+        allocate(size, stream);
+    }
     ~DeviceBuffer() { reset(); }
 
     DeviceBuffer(DeviceBuffer&& other) noexcept
-        : data_(other.data_), size_(other.size_)
+        : data_(other.data_), size_(other.size_), stream_(other.stream_)
     {
         other.data_ = 0;
         other.size_ = 0;
+        other.stream_ = 0;
     }
 
     DeviceBuffer& operator=(DeviceBuffer&& other) noexcept
@@ -97,8 +104,10 @@ public:
             reset();
             data_ = other.data_;
             size_ = other.size_;
+            stream_ = other.stream_;
             other.data_ = 0;
             other.size_ = 0;
+            other.stream_ = 0;
         }
         return *this;
     }
@@ -106,15 +115,16 @@ public:
     DeviceBuffer(const DeviceBuffer&) = delete;
     DeviceBuffer& operator=(const DeviceBuffer&) = delete;
 
-    void allocate(std::size_t size)
+    void allocate(std::size_t size, cudaStream_t stream = 0)
     {
         reset();
+        stream_ = stream;
         if (size != 0) {
 #if CUDART_VERSION >= 11020
             if (asynchronousMemoryPoolEnabled()) {
                 checkCuda(cudaMallocAsync(
                               reinterpret_cast<void**>(&data_),
-                              size * sizeof(T), 0),
+                              size * sizeof(T), stream_),
                           "cudaMallocAsync");
             } else
 #endif
@@ -132,7 +142,7 @@ public:
         if (data_ != 0) {
 #if CUDART_VERSION >= 11020
             if (asynchronousMemoryPoolEnabled()) {
-                cudaFreeAsync(data_, 0);
+                cudaFreeAsync(data_, stream_);
             } else
 #endif
             {
@@ -141,6 +151,7 @@ public:
         }
         data_ = 0;
         size_ = 0;
+        stream_ = 0;
     }
 
     T* get() { return data_; }
@@ -150,6 +161,7 @@ public:
 private:
     T* data_;
     std::size_t size_;
+    cudaStream_t stream_;
 };
 
 struct DeviceFrontDescriptor {
@@ -1091,6 +1103,7 @@ GpuLdltOptions::GpuLdltOptions()
     : batched_width_limit(64),
       panel_size(64),
       max_batch_nodes(256),
+      large_front_streams(4),
       bunch_kaufman_gamma((1.0f + std::sqrt(17.0f)) / 8.0f),
       absolute_pivot_tolerance(0.0f),
       relative_pivot_tolerance(32.0f * std::numeric_limits<float>::epsilon()),
@@ -1108,6 +1121,7 @@ GpuLdltStatistics::GpuLdltStatistics()
       delayed_columns(0),
       unresolved_root_columns(0),
       tree_waves(0),
+      large_front_streams(0),
       sorted_csc_fast_path(false),
       asynchronous_memory_pool(false),
       input_preprocessing_milliseconds(0.0f),
@@ -1127,17 +1141,25 @@ public:
         : options_(options),
           n_(0),
           complete_(false),
-          cublas_(0)
+          cublas_(0),
+          host_seen_generation_(0)
     {
         validateOptions();
         checkCublas(cublasCreate(&cublas_), "cublasCreate");
         // Keep FP32 input, output, and accumulation; do not reduce SGEMM to TF32.
         checkCublas(cublasSetMathMode(cublas_, CUBLAS_PEDANTIC_MATH),
                     "cublasSetMathMode");
+        initializeLargeFrontStreams();
     }
 
     ~Impl()
     {
+        for (std::size_t i = 0; i < large_cublas_.size(); ++i) {
+            cublasDestroy(large_cublas_[i]);
+        }
+        for (std::size_t i = 0; i < large_streams_.size(); ++i) {
+            cudaStreamDestroy(large_streams_[i]);
+        }
         if (cublas_ != 0) {
             cublasDestroy(cublas_);
         }
@@ -1153,6 +1175,9 @@ public:
         resetNumericState();
         validateInput(n, col_ptr, row_indices, values, symbolic);
         n_ = n;
+        host_seen_stamp_.assign(static_cast<std::size_t>(n_), 0);
+        host_seen_generation_ = 0;
+        statistics_.large_front_streams = large_streams_.size();
         statistics_.asynchronous_memory_pool = asynchronousMemoryPoolEnabled();
         cudaEvent_t start = 0;
         cudaEvent_t stop = 0;
@@ -1326,11 +1351,48 @@ private:
         DeviceBuffer<int> pivot_size;
     };
 
+    void initializeLargeFrontStreams()
+    {
+        large_streams_.resize(
+            static_cast<std::size_t>(options_.large_front_streams), 0);
+        large_cublas_.resize(large_streams_.size(), 0);
+        try {
+            for (std::size_t i = 0; i < large_streams_.size(); ++i) {
+                checkCuda(cudaStreamCreateWithFlags(
+                              &large_streams_[i], cudaStreamNonBlocking),
+                          "cudaStreamCreateWithFlags(large front)");
+                checkCublas(cublasCreate(&large_cublas_[i]),
+                            "cublasCreate(large front)");
+                checkCublas(cublasSetStream(
+                                large_cublas_[i], large_streams_[i]),
+                            "cublasSetStream(large front)");
+                checkCublas(cublasSetMathMode(
+                                large_cublas_[i], CUBLAS_PEDANTIC_MATH),
+                            "cublasSetMathMode(large front)");
+            }
+        } catch (...) {
+            for (std::size_t i = 0; i < large_cublas_.size(); ++i) {
+                if (large_cublas_[i] != 0) {
+                    cublasDestroy(large_cublas_[i]);
+                    large_cublas_[i] = 0;
+                }
+            }
+            for (std::size_t i = 0; i < large_streams_.size(); ++i) {
+                if (large_streams_[i] != 0) {
+                    cudaStreamDestroy(large_streams_[i]);
+                    large_streams_[i] = 0;
+                }
+            }
+            throw;
+        }
+    }
+
     void validateOptions() const
     {
         if (options_.batched_width_limit < 2 ||
             options_.panel_size < 2 ||
             options_.max_batch_nodes < 1 ||
+            options_.large_front_streams < 1 ||
             !(options_.bunch_kaufman_gamma > 0.0f) ||
             options_.absolute_pivot_tolerance < 0.0f ||
             options_.relative_pivot_tolerance < 0.0f ||
@@ -1391,6 +1453,8 @@ private:
         base_cols_.reset();
         base_values_.reset();
         global_to_local_.reset();
+        host_seen_stamp_.clear();
+        host_seen_generation_ = 0;
         statistics_ = GpuLdltStatistics();
         n_ = 0;
         complete_ = false;
@@ -1586,12 +1650,22 @@ private:
         }
     }
 
-    static void appendUnique(
-        std::vector<int>& destination,
-        std::unordered_set<int>& seen,
-        int value)
+    void beginFrontIdCollection()
     {
-        if (seen.insert(value).second) {
+        if (host_seen_generation_ == std::numeric_limits<int>::max()) {
+            std::fill(host_seen_stamp_.begin(), host_seen_stamp_.end(), 0);
+            host_seen_generation_ = 1;
+        } else {
+            ++host_seen_generation_;
+        }
+    }
+
+    void appendUnique(std::vector<int>& destination, int value)
+    {
+        if (host_seen_stamp_[static_cast<std::size_t>(value)] !=
+            host_seen_generation_) {
+            host_seen_stamp_[static_cast<std::size_t>(value)] =
+                host_seen_generation_;
             destination.push_back(value);
         }
     }
@@ -1604,11 +1678,9 @@ private:
         const int first_col = symbolic.supernode_ptr[node];
         const int end_col = symbolic.supernode_ptr[node + 1];
 
-        std::unordered_set<int> seen;
-        seen.reserve(static_cast<std::size_t>(
-            symbolic.row_ptr[node + 1] - symbolic.row_ptr[node]) * 2 + 16);
+        beginFrontIdCollection();
         for (int col = first_col; col < end_col; ++col) {
-            appendUnique(front.ids_host, seen, col);
+            appendUnique(front.ids_host, col);
         }
 
         NodeData& node_data = nodes_[node];
@@ -1616,20 +1688,20 @@ private:
             const NodeData& child = nodes_[static_cast<std::size_t>(
                 node_data.children[child_pos])];
             for (int i = 0; i < child.delayed; ++i) {
-                appendUnique(front.ids_host, seen, child.contribution_ids_host[i]);
+                appendUnique(front.ids_host, child.contribution_ids_host[i]);
             }
         }
         front.candidate_count = static_cast<int>(front.ids_host.size());
 
         for (int p = symbolic.row_ptr[node]; p < symbolic.row_ptr[node + 1]; ++p) {
-            appendUnique(front.ids_host, seen, symbolic.supernode_rows[p]);
+            appendUnique(front.ids_host, symbolic.supernode_rows[p]);
         }
         for (std::size_t child_pos = 0; child_pos < node_data.children.size(); ++child_pos) {
             const NodeData& child = nodes_[static_cast<std::size_t>(
                 node_data.children[child_pos])];
             for (std::size_t i = static_cast<std::size_t>(child.delayed);
                  i < child.contribution_ids_host.size(); ++i) {
-                appendUnique(front.ids_host, seen, child.contribution_ids_host[i]);
+                appendUnique(front.ids_host, child.contribution_ids_host[i]);
             }
         }
         front.order = static_cast<int>(front.ids_host.size());
@@ -1759,7 +1831,9 @@ private:
         FrontWork& front,
         DeviceBuffer<float>& work,
         int panel_begin,
-        int step) const
+        int step,
+        cudaStream_t stream,
+        cublasHandle_t cublas) const
     {
         const int panel_columns = step - panel_begin;
         const int remaining = front.order - step;
@@ -1769,7 +1843,7 @@ private:
         const float alpha = -1.0f;
         const float beta = 1.0f;
         checkCublas(cublasSgemm(
-                        cublas_, CUBLAS_OP_N, CUBLAS_OP_T,
+                        cublas, CUBLAS_OP_N, CUBLAS_OP_T,
                         remaining, remaining, panel_columns,
                         &alpha,
                         front.values.get() + step + panel_begin * front.order,
@@ -1781,20 +1855,24 @@ private:
                         front.order),
                     "flush large BK panel with SGEMM");
         const int total = remaining * remaining;
-        mirrorLowerToUpperKernel<<<(total + 255) / 256, 256>>>(
+        mirrorLowerToUpperKernel<<<(total + 255) / 256, 256, 0, stream>>>(
             front.values.get(), front.order, step);
         checkCuda(cudaGetLastError(), "mirror SGEMM Schur update");
     }
 
-    void factorLarge(FrontWork& front)
+    void factorLarge(
+        FrontWork& front,
+        cudaStream_t stream,
+        cublasHandle_t cublas)
     {
         DeviceBuffer<float> work(
-            static_cast<std::size_t>(front.order) * options_.panel_size);
-        DeviceBuffer<DeviceLargePanelState> device_state(1);
-        checkCuda(cudaMemset(
+            static_cast<std::size_t>(front.order) * options_.panel_size,
+            stream);
+        DeviceBuffer<DeviceLargePanelState> device_state(1, stream);
+        checkCuda(cudaMemsetAsync(
                       work.get(), 0,
                       static_cast<std::size_t>(front.order) * options_.panel_size *
-                          sizeof(float)),
+                          sizeof(float), stream),
                   "clear large-panel work array");
 
         int step = 0;
@@ -1803,7 +1881,7 @@ private:
 
         while (step < active_end) {
             const int panel_begin = step;
-            factorLargePanelControlKernel<<<1, 256>>>(
+            factorLargePanelControlKernel<<<1, 256, 0, stream>>>(
                 front.values.get(), work.get(), front.ids.get(),
                 front.pivot_size.get(), front.order, panel_begin, active_end,
                 delay_first, options_.panel_size, options_.bunch_kaufman_gamma,
@@ -1813,10 +1891,12 @@ private:
             checkCuda(cudaGetLastError(), "launch GPU-resident large BK panel");
 
             DeviceLargePanelState host_state;
-            checkCuda(cudaMemcpy(
+            checkCuda(cudaMemcpyAsync(
                           &host_state, device_state.get(), sizeof(host_state),
-                          cudaMemcpyDeviceToHost),
+                          cudaMemcpyDeviceToHost, stream),
                       "download large-panel summary");
+            checkCuda(cudaStreamSynchronize(stream),
+                      "wait for large-panel summary");
             if (host_state.step < panel_begin ||
                 host_state.active_end > active_end ||
                 host_state.active_end < host_state.step ||
@@ -1832,12 +1912,55 @@ private:
             front.two_by_two += host_state.two_by_two;
             delay_first = host_state.delay_current;
             if (host_state.panel_columns != 0) {
-                flushLargePanel(front, work, panel_begin, step);
+                flushLargePanel(
+                    front, work, panel_begin, step, stream, cublas);
             }
         }
 
         front.accepted = step;
         front.delayed = front.candidate_count - step;
+        checkCuda(cudaStreamSynchronize(stream),
+                  "finish concurrent large front");
+    }
+
+    void factorLargeFronts(
+        std::vector<FrontWork>& fronts,
+        const std::vector<int>& large)
+    {
+        if (large.empty()) {
+            return;
+        }
+        const std::size_t worker_count = std::min(
+            large_streams_.size(), large.size());
+        std::atomic<std::size_t> next(0);
+        std::vector<std::exception_ptr> failures(worker_count);
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count);
+        for (std::size_t slot = 0; slot < worker_count; ++slot) {
+            workers.push_back(std::thread([&, slot]() {
+                try {
+                    while (true) {
+                        const std::size_t index = next.fetch_add(1);
+                        if (index >= large.size()) {
+                            break;
+                        }
+                        factorLarge(
+                            fronts[large[index]],
+                            large_streams_[slot], large_cublas_[slot]);
+                    }
+                } catch (...) {
+                    failures[slot] = std::current_exception();
+                }
+            }));
+        }
+        for (std::size_t slot = 0; slot < workers.size(); ++slot) {
+            workers[slot].join();
+        }
+        for (std::size_t slot = 0; slot < worker_count; ++slot) {
+            if (failures[slot]) {
+                std::rethrow_exception(failures[slot]);
+            }
+        }
     }
 
     void finalizeFront(FrontWork& front)
@@ -2026,9 +2149,7 @@ private:
                     elapsedMilliseconds(small_medium_begin, HostClock::now());
 
                 const HostClock::time_point large_begin = HostClock::now();
-                for (std::size_t i = 0; i < large.size(); ++i) {
-                    factorLarge(fronts[large[i]]);
-                }
+                factorLargeFronts(fronts, large);
                 statistics_.large_panel_factorization_milliseconds +=
                     elapsedMilliseconds(large_begin, HostClock::now());
 
@@ -2081,6 +2202,10 @@ private:
     DeviceBuffer<int> base_cols_;
     DeviceBuffer<float> base_values_;
     DeviceBuffer<int> global_to_local_;
+    std::vector<int> host_seen_stamp_;
+    int host_seen_generation_;
+    std::vector<cudaStream_t> large_streams_;
+    std::vector<cublasHandle_t> large_cublas_;
 };
 
 GpuSupernodalLdltFactor::GpuSupernodalLdltFactor(const GpuLdltOptions& options)

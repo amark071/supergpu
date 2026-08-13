@@ -239,5 +239,33 @@ int main()
                   delayed_large_symbolic, true, true, "large panel delay")) {
         return 7;
     }
+
+    // Two independent roots exercise concurrent large-front CUDA streams.
+    const int concurrent_n = 130;
+    std::vector<float> concurrent_dense(
+        static_cast<std::size_t>(concurrent_n) * concurrent_n, 0.0f);
+    std::vector<int> concurrent_col_ptr(
+        static_cast<std::size_t>(concurrent_n + 1), 0);
+    std::vector<int> concurrent_rows;
+    for (int i = 0; i < concurrent_n; ++i) {
+        concurrent_dense[i + i * concurrent_n] =
+            2.0f + 0.001f * static_cast<float>(i);
+        concurrent_rows.push_back(i);
+        concurrent_col_ptr[i + 1] = i + 1;
+    }
+    CholmodSymbolicResult concurrent_symbolic;
+    concurrent_symbolic.column_parent.assign(concurrent_n, -1);
+    concurrent_symbolic.column_count.assign(concurrent_n, 1);
+    concurrent_symbolic.supernode_ptr = {0, 65, 130};
+    concurrent_symbolic.supernode_parent = {-1, -1};
+    concurrent_symbolic.row_ptr = {0, 65, 130};
+    for (int row = 0; row < concurrent_n; ++row) {
+        concurrent_symbolic.supernode_rows.push_back(row);
+    }
+    if (!runCase(
+            concurrent_dense, concurrent_col_ptr, concurrent_rows,
+            concurrent_symbolic, false, true, "concurrent large roots")) {
+        return 8;
+    }
     return 0;
 }

@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.18)
 project(supernodal_gpu LANGUAGES CXX CUDA)
 
 find_package(CUDAToolkit REQUIRED)
+find_package(Threads REQUIRED)
 
 find_path(METIS_INCLUDE_DIR metis.h)
 find_library(METIS_LIBRARY NAMES metis)
@@ -99,7 +100,7 @@ target_include_directories(gpu_supernodal_ldlt
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(gpu_supernodal_ldlt
-    PUBLIC CUDA::cudart CUDA::cublas
+    PUBLIC CUDA::cudart CUDA::cublas Threads::Threads
 )
 target_compile_features(gpu_supernodal_ldlt PUBLIC cxx_std_14 cuda_std_14)
 set_target_properties(gpu_supernodal_ldlt PROPERTIES

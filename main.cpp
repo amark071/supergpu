@@ -229,6 +229,7 @@ int main()
     gpu_options.batched_width_limit = 64;
     gpu_options.panel_size = 64;
     gpu_options.max_batch_nodes = 256;
+    gpu_options.large_front_streams = 4;
 
     GpuSupernodalLdltFactor gpu_factor(gpu_options);
     const GpuLdltStatistics gpu_statistics = gpu_factor.factorize(
@@ -250,6 +251,8 @@ int main()
               << gpu_statistics.unresolved_root_columns << '\n';
     std::cout << "Supernode tree waves = "
               << gpu_statistics.tree_waves << '\n';
+    std::cout << "Concurrent large-front CUDA streams = "
+              << gpu_statistics.large_front_streams << '\n';
     std::cout << "Maximum input asymmetry = "
               << gpu_statistics.maximum_input_asymmetry << '\n';
     std::cout << "Sorted unique CSC fast path = "

@@ -26,6 +26,9 @@ struct GpuLdltOptions {
     // Maximum number of fronts materialized in one tree-wave batch.
     int max_batch_nodes;
 
+    // Independent large fronts processed concurrently in separate CUDA streams.
+    int large_front_streams;
+
     // Bunch-Kaufman threshold; defaults to (1 + sqrt(17)) / 8.
     float bunch_kaufman_gamma;
 
@@ -51,6 +54,7 @@ struct GpuLdltStatistics {
     std::size_t delayed_columns;
     std::size_t unresolved_root_columns;
     std::size_t tree_waves;
+    std::size_t large_front_streams;
 
     bool sorted_csc_fast_path;
     bool asynchronous_memory_pool;
