@@ -110,8 +110,7 @@ void analyzeComparedOrdering(int n, SymbolicPipelineResult& result)
 SymbolicPipelineOptions::SymbolicPipelineOptions()
     : compare_orderings(false),
       rebuild_cache(false),
-      disable_cache(false),
-      cache_path("symbolic_analysis.cache")
+      disable_cache(false)
 {
 }
 

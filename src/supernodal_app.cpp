@@ -14,10 +14,6 @@
 #include <string>
 #include <vector>
 
-#ifndef SUPERNODAL_VISUALIZATION_DIR
-#define SUPERNODAL_VISUALIZATION_DIR "."
-#endif
-
 namespace {
 
 struct ApplicationOptions {
@@ -77,39 +73,43 @@ bool parseCommandLine(
     return true;
 }
 
-InputMatrix loadInputMatrix()
+InputMatrix loadInputMatrix(const std::string& filename)
 {
     InputMatrix matrix;
     readCSCMatrix(
-        "data/A_1215.dat", matrix.n, matrix.declared_nonzeros,
+        filename, matrix.n, matrix.declared_nonzeros,
         matrix.row_indices, matrix.col_ptr, matrix.values);
     return matrix;
 }
 
 SymbolicPipelineOptions makeSymbolicOptions(
-    const ApplicationOptions& options)
+    const ApplicationOptions& options,
+    const std::string& cache_filename)
 {
     SymbolicPipelineOptions symbolic_options;
     symbolic_options.compare_orderings = options.compare_orderings;
     symbolic_options.rebuild_cache = options.rebuild_symbolic_cache;
     symbolic_options.disable_cache = options.no_symbolic_cache;
+    symbolic_options.cache_path = cache_filename;
     return symbolic_options;
 }
 
 void exportRequestedSymbolicData(
     const ApplicationOptions& options,
     const InputMatrix& input,
-    const SymbolicPipelineResult& pipeline)
+    const SymbolicPipelineResult& pipeline,
+    const std::string& output_filename,
+    const std::string& visualization_directory)
 {
     if (options.export_ordered_matrix) {
         writeCSCMatrix(
-            "data/A_1215_ordered.dat", input.n,
+            output_filename, input.n,
             pipeline.ordered_row_indices, pipeline.ordered_col_ptr,
             pipeline.ordered_values);
     }
     if (options.export_visualization) {
         writeSymbolicVisualizationData(
-            SUPERNODAL_VISUALIZATION_DIR, input.n, pipeline.symbolic);
+            visualization_directory, input.n, pipeline.symbolic);
     }
 }
 
@@ -148,7 +148,8 @@ void printFillStatistics(
 void printSymbolicReport(
     const ApplicationOptions& options,
     const InputMatrix& input,
-    const SymbolicPipelineResult& pipeline)
+    const SymbolicPipelineResult& pipeline,
+    const std::string& visualization_directory)
 {
     std::cout << "Loaded " << input.values.size() << " nonzero entries\n";
     std::cout << input.n << 'x' << input.n << ", nonzero = "
@@ -176,7 +177,7 @@ void printSymbolicReport(
               << pipeline.symbolic.supernode_parent.size() << '\n';
     std::cout << "Visualization data = "
               << (options.export_visualization
-                      ? SUPERNODAL_VISUALIZATION_DIR
+                      ? visualization_directory
                       : "disabled (use --export-visualization)")
               << '\n';
 }
@@ -326,19 +327,25 @@ void printVerificationReport(const SolveVerificationResult& result)
 
 } // namespace
 
-int runSupernodalGpuApplication(int argc, char** argv)
+int runSupernodalGpuApplication(
+    int argc,
+    char** argv,
+    const SupernodalAppFiles& files)
 {
     ApplicationOptions options;
     if (!parseCommandLine(argc, argv, options)) {
         return 1;
     }
 
-    const InputMatrix input = loadInputMatrix();
+    const InputMatrix input = loadInputMatrix(files.input_filename);
     const SymbolicPipelineResult pipeline = runSymbolicPipeline(
         input.n, input.col_ptr, input.row_indices, input.values,
-        makeSymbolicOptions(options));
-    exportRequestedSymbolicData(options, input, pipeline);
-    printSymbolicReport(options, input, pipeline);
+        makeSymbolicOptions(options, files.symbolic_cache_filename));
+    exportRequestedSymbolicData(
+        options, input, pipeline, files.ordered_output_filename,
+        files.visualization_directory);
+    printSymbolicReport(
+        options, input, pipeline, files.visualization_directory);
 
     const GpuLdltOptions gpu_options = makeGpuOptions();
     GpuSupernodalLdltFactor gpu_factor(gpu_options);
