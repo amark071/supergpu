@@ -60,6 +60,7 @@ bool runCase(
     const GpuLdltStatistics statistics = factor.factorize(
         n, col_ptr, rows, values, symbolic);
     if (!factor.complete() ||
+        !statistics.sorted_csc_fast_path ||
         (require_two_by_two && statistics.accepted_two_by_two_pivots == 0) ||
         (require_large && statistics.large_panel_nodes == 0)) {
         std::cerr << name << ": " << factor.diagnostic() << '\n';
@@ -80,7 +81,7 @@ bool runCase(
 
 int main()
 {
-    // 对角线为零，必然触发第一个 2x2 Bunch--Kaufman 主元块。
+    // A zero diagonal forces the first 2x2 Bunch-Kaufman pivot.
     const int n = 4;
     const std::vector<float> dense = {
          0.0f, 2.0f, 0.0f, 0.0f,
@@ -95,8 +96,33 @@ int main()
         return 1;
     }
 
-    // 节点 0 的 0 对角元无法形成 1x1 主元；变量 0 延迟到父节点 1，
-    // 在父节点中与变量 1 组成稳定的 2x2 主元。
+    // A repeated diagonal entry forces the compatibility hash path. The two
+    // copies sum to the same diagonal represented by fallback_dense.
+    const std::vector<float> fallback_dense = {
+        4.0f, 1.0f,
+        1.0f, 3.0f
+    };
+    const std::vector<int> fallback_col_ptr = {0, 3, 5};
+    const std::vector<int> fallback_rows = {0, 0, 1, 0, 1};
+    const std::vector<float> fallback_values = {2.0f, 2.0f, 1.0f, 1.0f, 3.0f};
+    GpuSupernodalLdltFactor fallback_factor;
+    const GpuLdltStatistics fallback_statistics = fallback_factor.factorize(
+        2, fallback_col_ptr, fallback_rows, fallback_values,
+        oneFrontSymbolic(2));
+    const std::vector<float> fallback_rhs = {1.0f, -0.5f};
+    const std::vector<float> fallback_solution =
+        fallback_factor.solve(fallback_rhs);
+    const float fallback_residual = residualInfinityNorm(
+        fallback_dense, fallback_solution, fallback_rhs);
+    std::cout << "duplicate CSC fallback FP32 residual infinity norm = "
+              << fallback_residual << '\n';
+    if (!fallback_factor.complete() ||
+        fallback_statistics.sorted_csc_fast_path ||
+        fallback_residual > 2.0e-4f) {
+        return 2;
+    }
+
+    // Column 0 is delayed and forms a stable 2x2 pivot at its parent.
     const std::vector<float> delayed_dense = {
         0.0f, 1.0f,
         1.0f, 0.0f
@@ -112,7 +138,19 @@ int main()
     delayed_symbolic.supernode_rows = {0, 1, 1};
     if (!runCase(delayed_dense, delayed_col_ptr, delayed_rows,
                  delayed_symbolic, true, false, "delayed child-to-parent")) {
-        return 2;
+        return 3;
+    }
+
+    // A nonzero diagonal is not sufficient for a stable single-column pivot.
+    // The coupling to the update row dominates, so column 0 must be delayed and
+    // paired with column 1 at the parent instead of producing an O(1e8) multiplier.
+    const std::vector<float> unstable_single_dense = {
+        1.0e-8f, 1.0f,
+        1.0f,    0.0f
+    };
+    if (!runCase(unstable_single_dense, delayed_col_ptr, delayed_rows,
+                 delayed_symbolic, true, false, "unstable single delayed")) {
+        return 4;
     }
 
     const std::vector<float> chain_dense = {
@@ -130,11 +168,11 @@ int main()
     chain_symbolic.row_ptr = {0, 2, 4, 5};
     chain_symbolic.supernode_rows = {0, 1, 1, 2, 2};
     if (!runCase(chain_dense, chain_col_ptr, chain_rows,
-                 chain_symbolic, false, false, "three-level contribution")) {
-        return 3;
+                  chain_symbolic, false, false, "three-level contribution")) {
+        return 5;
     }
 
-    // 65 列强制进入大型 panel 路径；首两列形成 2x2 主元，余下为对角主元。
+    // Width 65 forces the large-panel path.
     const int large_n = 65;
     std::vector<float> large_dense(
         static_cast<std::size_t>(large_n) * large_n, 0.0f);
@@ -158,12 +196,11 @@ int main()
         large_col_ptr[col + 1] = static_cast<int>(large_rows.size());
     }
     if (!runCase(large_dense, large_col_ptr, large_rows,
-                 oneFrontSymbolic(large_n), true, true, "large panel BK")) {
-        return 4;
+                  oneFrontSymbolic(large_n), true, true, "large panel BK")) {
+        return 6;
     }
 
-    // 大节点在 panel 中途遇到第 10 列不稳定：立即刷新 panel，将该列上传父节点，
-    // 再在父节点与第 65 列形成稳定 2x2 主元。
+    // An unstable column inside a large panel is delayed to its parent.
     const int delayed_large_n = 66;
     std::vector<float> delayed_large_dense(
         static_cast<std::size_t>(delayed_large_n) * delayed_large_n, 0.0f);
@@ -199,8 +236,8 @@ int main()
     }
     delayed_large_symbolic.supernode_rows.push_back(65);
     if (!runCase(delayed_large_dense, delayed_large_col_ptr, delayed_large_rows,
-                 delayed_large_symbolic, true, true, "large panel delay")) {
-        return 5;
+                  delayed_large_symbolic, true, true, "large panel delay")) {
+        return 7;
     }
     return 0;
 }

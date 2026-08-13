@@ -1,0 +1,697 @@
+\chapter{超节点的两种带延迟主元的主元块分解算法}
+
+\section{非对称稠密矩阵的延迟主元 LU 方法}
+
+在超节点方法中，需要把单个超节点的主元块作为稠密矩阵进行 LU 分解。按照列主元方法，算法逐列选择主元并进行更新。如果某一列待分解的部分全为零，就无法选出列主元。LAPACK 的 \code{dgetrf} 会跳过该列，继续分解后续列并在最后报告错误；这种处理不能直接满足延迟主元求解流程的需要。
+
+一个子主元块无法分解，并不代表整个矩阵无法分解。当前节点不能消去的部分可以传递给父节点，再在父节点中尝试分解。
+
+需要处理的波前矩阵由四部分组成：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=0.82cm,y=0.82cm,font=\small]
+  \fill[MumpsBlue!16] (0,3.0) rectangle (4.4,7.2);
+  \fill[MumpsCyan!12] (4.4,3.0) rectangle (7.2,7.2);
+  \fill[MumpsCyan!12] (0,0) rectangle (4.4,3.0);
+  \fill[gray!13] (4.4,0) rectangle (7.2,3.0);
+  \draw[thick] (0,0) rectangle (7.2,7.2);
+  \draw[thick] (4.4,0)--(4.4,7.2);
+  \draw[thick] (0,3.0)--(7.2,3.0);
+  \node at (2.2,5.1) {Fully Summed};
+  \node at (5.8,5.1) {U Factor};
+  \node at (2.2,1.5) {L Factor};
+  \node at (5.8,1.5) {CB Block};
+\end{tikzpicture}
+\caption{非对称超节点对应的波前矩阵。}
+\label{fig:appendix-a-unsym-front}
+\end{figure}
+
+其中：
+
+\begin{itemize}
+  \item Fully Summed 是已经装配完成、可以进行分解的矩阵，即超节点的对角块；
+  \item L/U Factor 是需要根据 Fully Summed 部分的分解结果更新的块，最终作为因子保存；
+  \item CB Block 是子节点传给父节点的贡献块，需要在更新后传递给父节点；
+  \item 对角块之外的行列来自与对角块中的行列相耦合的变量。
+\end{itemize}
+
+该方法采用 right-looking 列主元方法和 KJI 更新方法。
+
+\subsection{Step 1：分解 Fully Summed 块}
+
+首先单独考虑 Fully Summed 块的分解。已经分解的部分包含 $L_{EE}$、$U_{EE}$、$L_{DE}$ 和 $U_{ED}$，接下来需要继续分解 Unfactored Block。自然的处理过程是：
+
+\begin{enumerate}
+  \item 首先选择列主元；如果能够选到合适的列主元，则进行行交换 $P$，并用该元素作为主元；
+  \item 如果不能选到合适的列主元，则在整个活动子块中选择主元。此时需要同时进行行、列交换，将活动子块的全局最大元素置换到当前主元位置，根据该主元计算 $L_p$，再更新 $U_p$ 和右下角子块。
+\end{enumerate}
+
+\subsubsection{列主元接受阈值}
+
+设第 $k$ 步尚未分解的活动子块为
+
+\[
+S^{(k)}=\left[s_{ij}^{(k)}\right]_{i,j=k}^{f},
+\]
+
+其中 $f$ 为 Fully Summed 块的阶数，$\tau\in(0,1)$ 为主元接受阈值。
+
+列主元只搜索活动子块的第 $k$ 列，候选主元所在行为
+
+\[
+p_k=\underset{k\le i\le f}{\operatorname{argmax}}
+      \left|s_{ik}^{(k)}\right|,
+\qquad
+\alpha_k=\left|s_{p_k k}^{(k)}\right|.
+\]
+
+记活动子块中的最大元素为
+
+\[
+\beta_k=\left\|S^{(k)}\right\|_{\max}
+=\max_{k\le i,j\le f}\left|s_{ij}^{(k)}\right|.
+\]
+
+当
+
+\[
+\alpha_k\ge\tau\beta_k
+\]
+
+时，认为列主元足够稳定。用行置换矩阵 $P_k$ 交换第 $k$ 行和第 $p_k$ 行：
+
+\[
+\widetilde S^{(k)}=P_kS^{(k)},
+\qquad
+d_k=\widetilde s_{kk}^{(k)}=s_{p_k k}^{(k)}.
+\]
+
+这里 $\alpha_k$ 是当前列能够选到的最大主元，$\beta_k$ 是整个活动子块的最大元素；$\tau$ 决定当前列的最大元素相对于活动子块整体尺度需要达到多大比例才可接受。
+
+\subsubsection{全主元搜索}
+
+若
+
+\[
+\alpha_k<\tau\beta_k,
+\]
+
+则在整个活动子块中搜索最大元素：
+
+\[
+(p_k,q_k)=\underset{k\le i,j\le f}{\operatorname{argmax}}
+           \left|s_{ij}^{(k)}\right|.
+\]
+
+分别用 $P_k$ 和 $Q_k$ 将第 $p_k$ 行、第 $q_k$ 列交换到第 $k$ 行、第 $k$ 列：
+
+\[
+\widetilde S^{(k)}=P_kS^{(k)}Q_k,
+\qquad
+d_k=\widetilde s_{kk}^{(k)}=s_{p_kq_k}^{(k)},
+\qquad
+|d_k|=\beta_k.
+\]
+
+因此，只使用列主元时，最终分解满足
+
+\[
+PA=LU;
+\]
+
+如果使用过全主元，则必须记录行、列两种置换，最终满足
+
+\[
+PAQ=LU.
+\]
+
+\subsubsection{right-looking 更新}
+
+主元 $d_k$ 确定后，对主元行、主元列和右下角剩余子块执行 right-looking 更新：
+
+\[
+(L_p)_i=\frac{\widetilde s_{ik}^{(k)}}{d_k},
+\quad k<i\le f,
+\qquad
+(U_p)_j=\widetilde s_{kj}^{(k)},
+\quad k<j\le f,
+\]
+
+\[
+s_{ij}^{(k+1)}
+=\widetilde s_{ij}^{(k)}-(L_p)_i(U_p)_j
+=\widetilde s_{ij}^{(k)}
+-\frac{\widetilde s_{ik}^{(k)}\widetilde s_{kj}^{(k)}}{d_k},
+\qquad k<i,j\le f.
+\]
+
+若 $\beta_k=0$，则 $S^{(k)}$ 是全零块，列主元和全主元均不存在，在数值意义下不能继续分解，需要将未分解变量延迟到父节点。
+
+完成上述步骤后，$P$、$U_p$ 和 $L_p$ 归入已分解部分，剩余部分继续作为 Unfactored Block 进行下一步迭代。
+
+\subsubsection{列延迟优化}
+
+直接进行全主元搜索和逐项更新会消耗大量时间。全主元通过行列变换把全局最大元素移动到当前主元位置，本质上是先把全局最大元素所在列交换到第 $k$ 列，再在换入列中进行一次列主元分解。原来的第 $k$ 列在活动部分全为零时，可以直接移到未分解区域尾部。
+
+被移动到右侧的列在当前活动部分满足
+
+\[
+A(k:m-1,j)=0.
+\]
+
+后续 LU 更新为
+
+\[
+A(k+1:m-1,j)
+\leftarrow
+A(k+1:m-1,j)-L(:,k)U(k,j).
+\]
+
+由于
+
+\[
+U(k,j)=0,
+\]
+
+更新项也为零，该列在后续分解中仍保持为零。因此，全主元步骤可以替换为以下列延迟步骤：
+
+\begin{enumerate}
+  \item 若 $\alpha_k<\tau\beta_k$，将该列移动到 Unfactored Block 的尾部，并记录此次列交换；
+  \item 从右向左寻找第一列可用列，找到后立即停止，不再比较其他列；
+  \item 在该列内部使用列主元法，并将该列与当前被延迟的列交换；
+  \item 为防止已进入尾部的零列再次被交换到前方，搜索范围必须排除已形成的延迟后缀；
+  \item 如果搜索到当前活动区的起点仍找不到可用列，说明整个 Unfactored Block 已经全零，剩余主元全部延迟。
+\end{enumerate}
+
+\subsubsection{自适应 KJI--SAXPY 分块优化}
+
+如果每次选择主元后立即更新所有剩余元素，计算会包含大量细粒度操作。可以借助 BLAS 三角求解和矩阵乘法对矩阵块进行集中更新，即先分解一部分主元，再统一更新剩余部分。
+
+示例实现选择的 panel 长度为 64。在 panel 内选择列主元时，搜索范围不是一个 $64\times64$ 方块，而是当前列的全部活动行，因此 panel 实际上是长方形矩阵。选择主元后，只更新当前长方形 panel 中的数值；只要保证下一次选择主元之前当前列已经包含此前主元的更新即可。完成一个 panel 后，再更新其余部分并开始新的 panel。
+
+延迟主元会影响正在处理的 panel。为了保证数值分解正确，算法在遇到延迟主元时立即停止当前 panel 的分解，根据当前 panel 已经接受的主元把矩阵剩余部分完整更新一次，然后从交换进来的非零列开始新的 panel。这样既使用 BLAS 加速了分解，又保证主元搜索作用于最新的 Schur 补。
+
+测试中，列延迟方法使整个计算过程的时间缩短约 $90\%$；采用更细粒度的自适应 KJI--SAXPY 方法后，速度还能提升约一倍。整体优化后的算子在经过特别设计的算例上的运行时间已经略快于 LAPACK。
+
+\subsection{Step 2：更新波前矩阵}
+
+Fully Summed 部分完成分解后，波前矩阵按已分解变量 $E$、延迟变量 $D$ 和普通更新变量 $U$ 分成以下部分：
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=0.84cm,y=0.84cm,font=\small]
+  \def\e{3.6}
+  \def\d{4.9}
+  \def\t{7.4}
+  \fill[MumpsBlue!16] (0,3.7) rectangle (\e,\t);
+  \fill[MumpsRed!10] (\e,3.7) rectangle (\d,\t);
+  \fill[MumpsCyan!10] (\d,3.7) rectangle (\t,\t);
+  \fill[MumpsRed!10] (0,2.3) rectangle (\t,3.7);
+  \fill[MumpsCyan!10] (0,0) rectangle (\t,2.3);
+  \draw[thick] (0,0) rectangle (\t,\t);
+  \draw[thick] (\e,0)--(\e,\t);
+  \draw[thick] (\d,0)--(\d,\t);
+  \draw[thick] (0,2.3)--(\t,2.3);
+  \draw[thick] (0,3.7)--(\t,3.7);
+  \node at (1.8,5.55) {$L_{EE}\backslash U_{EE}$};
+  \node at (4.25,5.55) {$U_{ED}$};
+  \node at (6.15,5.55) {$A_{EU}$};
+  \node at (1.8,3.0) {$L_{DE}$};
+  \node at (4.25,3.0) {$0$};
+  \node at (6.15,3.0) {$A_{DU}$};
+  \node at (1.8,1.15) {$A_{UE}$};
+  \node at (4.25,1.15) {$A_{UD}$};
+  \node at (6.15,1.15) {$A_{UU}$};
+  \node[above] at (1.8,7.48) {$E$};
+  \node[above] at (4.25,7.48) {$D$};
+  \node[above] at (6.15,7.48) {$U$};
+\end{tikzpicture}
+\caption{Step 1 完成后波前矩阵的分区。}
+\label{fig:appendix-a-unsym-step2}
+\end{figure}
+
+\subsubsection{Step 2.1：更新 $A_{UE}$、$A_{EU}$}
+
+利用三角求解计算
+
+\[
+U_{EU}=L_{EE}^{-1}A_{EU},
+\qquad
+L_{UE}=A_{UE}U_{EE}^{-1}.
+\]
+
+\subsubsection{Step 2.2：更新 $A_{DU}$、$A_{UD}$}
+
+\[
+A_{DU}\leftarrow A_{DU}-L_{DE}U_{EU},
+\]
+
+\[
+A_{UD}\leftarrow A_{UD}-L_{UE}U_{ED}.
+\]
+
+\subsubsection{Step 2.3：更新 $A_{UU}$}
+
+\[
+A_{UU}\leftarrow A_{UU}-L_{UE}U_{EU}.
+\]
+
+\subsection{Step 3：传递贡献块给父节点}
+
+Step 2 更新完成后，将右下的四个子矩阵组成扩展贡献块，并传递给父节点装配。这里的“组装”不是按照几何位置直接拼接整个稠密块，而是根据贡献块的全局行、列编号执行 extend-add，即扩展--累加。普通更新变量与父节点已有索引匹配后进行累加；子节点未消去的延迟变量则动态扩充父节点的候选主元区域。
+
+\subsubsection{Step 3.1：子节点传出的内容}
+
+设子节点已消去的变量为 $E_c$，未能消去的延迟变量为 $D_c$，原来的普通更新变量为 $U_c$。子节点传出的扩展贡献块为
+
+\[
+C_c=
+\begin{bmatrix}
+S_{DD}&S_{DU}\\
+S_{UD}&S_{UU}
+\end{bmatrix},
+\qquad
+I_c^{\mathrm{out}}=D_c\cup U_c.
+\]
+
+除了数值 $C_c$，还必须同时传递其全局行、列索引数组。对于非对称 LU，行索引和列索引应分别保存：
+
+\[
+R_c^{\mathrm{out}}=D_c^r\cup U_c^r,
+\qquad
+C_c^{\mathrm{out}}=D_c^c\cup U_c^c.
+\]
+
+数值块中的第 $(i,j)$ 个元素必须与 $R_c^{\mathrm{out}}(i)$ 和 $C_c^{\mathrm{out}}(j)$ 两个全局编号绑定，不能只传递没有索引的稠密数组。
+
+\subsubsection{Step 3.2：父节点建立新的索引集}
+
+设父节点原来的候选主元集为 $E_p$，更新集为 $U_p$。正确的符号分析通常应保证子节点的普通更新变量已经位于父波前中，即
+
+\[
+U_c\subseteq E_p\cup U_p.
+\]
+
+普通更新变量是相对于子节点而言的。到达父节点后，需要根据符号分析确定的消去归属重新分类：
+
+\begin{itemize}
+  \item $U_c\cap E_p$ 在子节点中只是更新变量，但到达父节点后已经 Fully Summed，可以在父节点参与主元选择；
+  \item $U_c\cap U_p$ 仍然位于父节点的更新区。
+\end{itemize}
+
+因此
+
+\[
+U_c=(U_c\cap E_p)\cup(U_c\cap U_p).
+\]
+
+延迟变量 $D_c$ 是数值分解过程中动态产生的，所以父节点需要把它加入新的候选主元集：
+
+\[
+E_p^{\mathrm{new}}=E_p\cup D_c,
+\qquad
+I_p^{\mathrm{new}}=E_p^{\mathrm{new}}\cup U_p.
+\]
+
+\subsubsection{Step 3.3：建立局部映射并累加数值}
+
+父节点为每个全局行、列编号建立到局部存储位置的映射：
+
+\[
+\operatorname{map}_r(g)
+=g\text{ 在父波前行索引中的局部位置},
+\]
+
+\[
+\operatorname{map}_c(g)
+=g\text{ 在父波前列索引中的局部位置}.
+\]
+
+如果扩展后出现新的行或列，先扩展父波前的存储空间，并把新位置初始化为零。然后对子贡献块执行散射累加：
+
+\[
+F_p\!\left(
+\operatorname{map}_r(R_c^{\mathrm{out}}(i)),
+\operatorname{map}_c(C_c^{\mathrm{out}}(j))
+\right)
+\mathrel{+}=C_c(i,j).
+\]
+
+父矩阵中原来没有数值的位置按零处理，累加子节点贡献后成为新的填充。如果多个子节点对同一全局位置都有贡献，必须把这些贡献全部累加，不能相互覆盖。
+
+\subsubsection{Step 3.4：组装后的分区与继续传递}
+
+完成所有子贡献块的 extend-add 后，父节点按照以下规则处理：
+
+\begin{itemize}
+  \item $E_p\cup D_c$ 放入 Fully Summed 候选主元区，在父节点重新执行主元检验；
+  \item 在父节点重复 Step 1 和 Step 2，成功消去的延迟变量进入 $L/U$ 因子；
+  \item 仍然无法通过主元检验的变量再次进入父节点的扩展贡献块，继续向更高层节点传递。
+\end{itemize}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw,thick,rounded corners=2pt,text width=3.25cm,minimum height=1.15cm,align=center},
+  arr/.style={-{Stealth[length=2.4mm]},thick}
+]
+  \node[box,fill=MumpsCyan!12] (child) {子节点：$C_c$\\全局行、列索引};
+  \node[box,fill=MumpsBlue!13,right=1.0cm of child] (parent) {父波前扩展索引\\执行 extend-add};
+  \node[box,fill=MumpsRed!10,right=1.0cm of parent] (next) {重新选择主元\\未消去变量继续上传};
+  \draw[arr] (child)--(parent);
+  \draw[arr] (parent)--(next);
+\end{tikzpicture}
+\caption{延迟主元贡献块向父节点传递。}
+\label{fig:appendix-a-extend-add}
+\end{figure}
+
+\section{对称稠密矩阵的 Bunch--Kaufman 方法}
+
+如果整个波前矩阵是对称的，则 Fully Summed 块也是对称的。此时采用 Bunch--Kaufman 方法进行带对称主元选择的 $LDL^T$ 分解：
+
+\[
+P^TAP=LDL^T.
+\]
+
+其中，$P$ 是同时置换行、列的置换矩阵，$L$ 是单位下三角矩阵，$D$ 是由 $1\times1$ 和 $2\times2$ 主元块组成的块对角矩阵。与非对称 LU 不同，对称分解不能只交换行而不交换列；交换第 $i$、$j$ 行时，必须同时交换第 $i$、$j$ 列。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=0.82cm,y=0.82cm,font=\small]
+  \fill[MumpsBlue!16] (0,3.0) rectangle (4.4,7.2);
+  \fill[MumpsCyan!12] (4.4,3.0) rectangle (7.2,7.2);
+  \fill[MumpsCyan!12] (0,0) rectangle (4.4,3.0);
+  \fill[gray!13] (4.4,0) rectangle (7.2,3.0);
+  \draw[thick] (0,0) rectangle (7.2,7.2);
+  \draw[thick] (4.4,0)--(4.4,7.2);
+  \draw[thick] (0,3.0)--(7.2,3.0);
+  \node at (2.2,5.1) {Fully Summed};
+  \node at (5.8,5.1) {$L^T$ Factor};
+  \node at (2.2,1.5) {$L$ Factor};
+  \node at (5.8,1.5) {CB Block};
+\end{tikzpicture}
+\caption{对称超节点对应的波前矩阵。}
+\label{fig:appendix-a-sym-front}
+\end{figure}
+
+\subsection{对称 Step 1：分解 Fully Summed 块}
+
+设第 $k$ 步尚未分解的活动对称子块为
+
+\[
+S^{(k)}=\left[s_{ij}^{(k)}\right]_{i,j=k}^{f},
+\qquad
+S^{(k)}=\left(S^{(k)}\right)^T,
+\]
+
+其中 $f$ 是当前仍可参与主元选择的 Fully Summed 变量个数。Bunch--Kaufman 方法在每一步选择一个 $1\times1$ 或 $2\times2$ 对角主元块，并保持后续更新仍然对称。
+
+\subsubsection{Step 1.1：Bunch--Kaufman 主元搜索}
+
+定义 Bunch--Kaufman 阈值
+
+\[
+\gamma=\frac{1+\sqrt{17}}{8}\approx0.640388.
+\]
+
+首先检查第 $k$ 列，记当前对角元素大小为
+
+\[
+a_k=\left|s_{kk}^{(k)}\right|.
+\]
+
+第 $k$ 列对角线以下的最大元素所在行为
+
+\[
+p=\underset{k<i\le f}{\operatorname{argmax}}
+  \left|s_{ik}^{(k)}\right|,
+\qquad
+\lambda_k=\max_{k<i\le f}\left|s_{ik}^{(k)}\right|
+=\left|s_{pk}^{(k)}\right|.
+\]
+
+如果该列不为数值零，则按照以下规则选择主元：
+
+\begin{enumerate}
+  \item 若
+  \[
+  a_k\ge\gamma\lambda_k,
+  \]
+  直接采用 $s_{kk}^{(k)}$ 作为 $1\times1$ 主元，不进行交换。
+
+  \item 若
+  \[
+  a_k<\gamma\lambda_k,
+  \]
+  则检查候选行 $p$。定义该行除对角元素之外的最大元素
+  \[
+  \sigma_p=
+  \max_{\substack{k\le j\le f\\j\ne p}}
+  \left|s_{pj}^{(k)}\right|.
+  \]
+  因为 $|s_{pk}^{(k)}|=\lambda_k$，所以 $\lambda_k>0$ 时有 $\sigma_p\ge\lambda_k>0$。随后依次判断：
+  \begin{enumerate}[label=(\alph*)]
+    \item 若
+    \[
+    a_k\ge\gamma\frac{\lambda_k^2}{\sigma_p},
+    \]
+    仍然使用 $s_{kk}^{(k)}$ 作为 $1\times1$ 主元；
+
+    \item 否则，若
+    \[
+    \left|s_{pp}^{(k)}\right|\ge\gamma\sigma_p,
+    \]
+    同时交换第 $k$、$p$ 行和第 $k$、$p$ 列，把 $s_{pp}^{(k)}$ 移到 $(k,k)$，并将其作为 $1\times1$ 主元；
+
+    \item 若以上两个条件均不满足，选择由第 $k$、$p$ 个变量组成的 $2\times2$ 主元块。通过对称交换将变量 $p$ 移动到 $k+1$ 位置，得到
+    \[
+    D_k=
+    \begin{bmatrix}
+    \widetilde s_{kk}^{(k)}&\widetilde s_{k,k+1}^{(k)}\\
+    \widetilde s_{k+1,k}^{(k)}&\widetilde s_{k+1,k+1}^{(k)}
+    \end{bmatrix}.
+    \]
+  \end{enumerate}
+\end{enumerate}
+
+\subsubsection{Step 1.2：对称置换}
+
+对于 $1\times1$ 主元 $s_{pp}^{(k)}$，用置换矩阵 $P_k$ 同时交换第 $k$、$p$ 行和第 $k$、$p$ 列：
+
+\[
+\widetilde S^{(k)}=P_k^TS^{(k)}P_k,
+\qquad
+D_k=\left[\widetilde s_{kk}^{(k)}\right].
+\]
+
+对于由 $k$、$p$ 组成的 $2\times2$ 主元，用 $P_k$ 将这两个变量放到活动子块的前两个位置：
+
+\[
+\widetilde S^{(k)}=P_k^TS^{(k)}P_k
+=
+\begin{bmatrix}
+D_k&B_k^T\\
+B_k&C_k
+\end{bmatrix},
+\qquad
+D_k\in\mathbb R^{2\times2}.
+\]
+
+置换必须同时作用于整个波前矩阵的相应行和列，并同步更新全局变量编号。多步置换累积后，最终得到
+
+\[
+P=P_1P_2\cdots P_t,
+\qquad
+P^TFP=LDL^T.
+\]
+
+\subsubsection{Step 1.3：检查二阶主元的稳定性}
+
+设
+
+\[
+D_k=
+\begin{bmatrix}
+a&b\\
+b&c
+\end{bmatrix},
+\qquad
+\Delta_k=\det(D_k)=ac-b^2.
+\]
+
+当 $\Delta_k\ne0$ 时，
+
+\[
+D_k^{-1}
+=\frac{1}{\Delta_k}
+\begin{bmatrix}
+c&-b\\
+-b&a
+\end{bmatrix}.
+\]
+
+Bunch--Kaufman 判据能够控制消元乘子的增长，但计算中仍应避免直接使用数值上近奇异的 $2\times2$ 块。可以进行额外条件数检查：
+
+\[
+\operatorname{rcond}(D_k)
+=\frac{1}{\|D_k\|\,\|D_k^{-1}\|}
+\ge\tau_D.
+\]
+
+如果不计算条件数，也可以使用行列式尺度判据进行快速筛选：
+
+\[
+|\Delta_k|>
+\varepsilon_{\mathrm{piv}}\|D_k\|^2.
+\]
+
+如果 $D_k$ 不满足稳定性要求，则不能直接计算 $D_k^{-1}$，应将相关变量延迟到父节点，在更大的 Fully Summed 候选集中重新选择主元。
+
+\subsubsection{Step 1.4：计算 $L$ 并更新活动子块}
+
+设本步主元阶数为 $r\in\{1,2\}$。完成对称置换后，将子块写成
+
+\[
+\widetilde S^{(k)}
+=
+\begin{bmatrix}
+D_k&B_k^T\\
+B_k&C_k
+\end{bmatrix},
+\qquad
+D_k\in\mathbb R^{r\times r}.
+\]
+
+当前块列的消元乘子为
+
+\[
+L_k=B_kD_k^{-1}.
+\]
+
+右下角活动子块通过对称 Schur 补更新：
+
+\[
+S^{(k+r)}
+=C_k-L_kD_kL_k^T
+=C_k-B_kD_k^{-1}B_k^T.
+\]
+
+对于 $1\times1$ 主元 $D_k=[d_k]$，公式退化为
+
+\[
+L_k=\frac{B_k}{d_k},
+\qquad
+S^{(k+1)}=C_k-\frac{B_kB_k^T}{d_k}.
+\]
+
+对于 $2\times2$ 主元，使用
+
+\[
+L_k=
+\frac{1}{\Delta_k}
+B_k
+\begin{bmatrix}
+c&-b\\
+-b&a
+\end{bmatrix},
+\]
+
+然后执行秩 2 对称更新
+
+\[
+S^{(k+2)}=C_k-L_kD_kL_k^T.
+\]
+
+每成功消去一个 $1\times1$ 主元，令 $k\leftarrow k+1$；每成功消去一个 $2\times2$ 主元，令 $k\leftarrow k+2$。未通过主元检验的变量不进入 $D$，而是移动到延迟区；如果当前节点剩余的 Fully Summed 变量都无法形成稳定主元，则停止本节点的数值消元。如果存在找不到列主元的情况，即当前列全零，则将其移动到最后一个主元位置，准备延迟。
+
+\subsection{块分解优化}
+
+与非对称情况相同，对称算法使用分块方法优化。算法维护四个连续区间：
+
+\begin{lstlisting}
+[0, panel_begin)       以前面板已经消去
+[panel_begin, k)       当前面板已经接受的主元
+[k, active_end)        仍可参与主元选择的活动节点
+[active_end, n)        已经延迟的节点
+\end{lstlisting}
+
+设当前 panel 从
+
+\[
+b=\code{panel\_begin}
+\]
+
+开始。以前 panel 产生的 Schur 补已经全部写回 $A$，所以 panel 开始时
+
+\[
+A(b:n-1,b:n-1)
+\]
+
+就是最新的尾矩阵。
+
+假设当前 panel 已经接受了 $t$ 列，令
+
+\[
+L_P=L(:,b:b+t-1),
+\]
+
+相应的 $1\times1$ 和 $2\times2$ 主元组成 $D_P$。定义工作矩阵
+
+\[
+W_P=L_PD_P.
+\]
+
+真正的当前 Schur 补为
+
+\[
+S=A_{\mathrm{stored}}-L_PD_PL_P^T
+=A_{\mathrm{stored}}-L_PW_P^T.
+\]
+
+准备处理第 $k$ 列时，$A(:,k)$ 尚未包含当前 panel 前面 $t$ 列主元的更新，因此必须先计算当前列的更新，再继续选择主元。
+
+按照 Bunch--Kaufman 方法，首先判断当前列的对角元素是否满足阈值要求；如果满足，则把它标记为主元。如果不满足，后续判定需要使用当前列最大元素所在行的数据，因此还需要更新该行。
+
+当 $1\times1$、$2\times2$ 主元均不满足要求时，需要延迟主元。算法维护 \code{active\_end}，记录尾部延迟行、列的边界；每次延迟时，从该边界向左寻找下一个非零列，再将其与被延迟主元交换。
+
+每个 panel 的分解过程维护工作数组 $W_P$。理论上可以只保存 $L_P,D_P$，但每次需要当前列时，都必须先计算
+
+\[
+D_PL_P(k,:)^T,
+\]
+
+再计算
+
+\[
+L_P\left(D_PL_P(k,:)^T\right).
+\]
+
+由于 $D_P$ 混合了 $1\times1$ 和 $2\times2$ 块，反复执行这一过程较为复杂。预先保存
+
+\[
+W_P=L_PD_P
+\]
+
+后，当前列可直接计算
+
+\[
+L_PW_P(k,:)^T,
+\]
+
+只需要一次 \code{dgemv}，不必在每次更新时重新遍历 $D_P$ 的 $1\times1/2\times2$ 块结构。
+
+$W_P$ 的大小为
+
+\[
+\code{panel\_size}\times\code{active\_size}.
+\]
+
+默认设置下最大为
+
+\[
+64\times8192,
+\]
+
+采用双精度存储约占 $4\,\mathrm{MiB}$。工作矩阵也必须随着主元选择期间的行、列交换同步交换。

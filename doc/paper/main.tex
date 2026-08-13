@@ -34,9 +34,17 @@
 % 示例文档用包和设定，该段均可移除.
 \usepackage{enumitem,fancyvrb}
 \usepackage{booktabs,multirow,longtable,makecell} % 表格相关
+\usepackage{listings}
+\usetikzlibrary{arrows.meta,positioning}
 \RecustomVerbatimEnvironment{Verbatim}{Verbatim}{frame = single, tabsize = 4, fontsize=\footnotesize}
+
 \renewcommand{\v}[1]{\boldsymbol{#1}}
 \newcommand\pkg[1]{\textsf{#1}}
+\newcommand\code[1]{\texttt{#1}}
+
+\definecolor{MumpsBlue}{RGB}{0,91,172}
+\definecolor{MumpsCyan}{RGB}{0,158,166}
+\definecolor{MumpsRed}{RGB}{196,50,48}
 
 % 参考文献边距字体
 \setlength{\bibitemsep}{3bp}

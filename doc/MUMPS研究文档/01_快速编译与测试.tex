@@ -1,0 +1,628 @@
+\chapter{快速编译与测试}
+
+\section{下载}
+
+下载软件包，并切换到自己的Git分支：
+
+\begin{lstlisting}[language=bash]
+git clone https://github.com/HanHFEM/mumps_cxx.git
+cd mumps_cxx
+git checkout -b xxx
+\end{lstlisting}
+
+如果要把本地分支上传到远端，指定远端和分支：
+
+\begin{lstlisting}[language=bash]
+git push origin xxx
+\end{lstlisting}
+
+\section{编译}
+
+\subsection{安装必需库}
+
+安装Fortran编译器：
+
+\begin{lstlisting}[language=bash]
+sudo apt-get install gfortran
+\end{lstlisting}
+
+安装OpenMPI：
+
+\begin{lstlisting}[language=bash]
+sudo apt-get install libopenmpi-dev
+\end{lstlisting}
+
+安装ScaLAPACK、METIS、ParMETIS和LAPACK：
+
+\begin{lstlisting}[language=bash]
+sudo apt-get install libscalapack-openmpi-dev
+sudo apt-get install libscalapack-mpi-dev
+sudo apt-get install libmetis-dev
+sudo apt-get install libparmetis-dev
+sudo apt-get install liblapack-dev
+\end{lstlisting}
+
+不同Ubuntu版本提供的ScaLAPACK包可能不同。若两个ScaLAPACK包互相冲突，应根据当前MPI实现选择其中一个。
+
+
+\subsection{配置附加选项}
+
+进入MUMPS目录：
+
+\begin{lstlisting}[language=bash]
+cd mumps-5.6.2.2
+\end{lstlisting}
+
+可以参考项目中的以下说明文件：
+
+\begin{itemize}
+  \item \texttt{Readme\_options.md}；
+  \item \texttt{Readme\_ordering.md}；
+  \item \texttt{Readme\_LAPCK.md}。
+\end{itemize}
+
+默认使用的配置命令为：
+
+\begin{lstlisting}[language=bash]
+cmake -B build \
+  -Dparmetis=yes \
+  -DCMAKE_INSTALL_PREFIX=./install \
+  -DCMAKE_PREFIX_PATH=/mingw64 \
+  -Dparallel=true
+\end{lstlisting}
+
+参数含义：
+
+\begin{itemize}
+  \item \texttt{-Dparmetis=yes}：启用ParMETIS等相关功能；
+  \item \texttt{-DCMAKE\_INSTALL\_PREFIX=./install}：把安装目录设为当前目录下的 \texttt{install}；
+  \item \texttt{-DCMAKE\_PREFIX\_PATH=/mingw64}：增加依赖库搜索前缀，该路径需要根据本机环境调整；
+  \item \texttt{-Dparallel=true}：启用MPI并行版本。
+\end{itemize}
+
+\subsection{执行构建}
+
+\begin{lstlisting}[language=bash]
+cmake --build build
+\end{lstlisting}
+
+进入 \texttt{mumps-5.6.2.2/build} 后，可以看到典型构建产物：
+
+\begin{lstlisting}
+libdmumps.a
+libmumps_common.a
+libpord.a
+libsmumps.a
+以及一系列.mod文件
+\end{lstlisting}
+
+\section{编译C/C++算例}
+
+\subsection{修改测试目录的CMakeLists.txt}
+
+在 \texttt{mumps\_cxx/mumps-5.6.2.2/test} 中增加：
+
+\begin{itemize}
+  \item \texttt{compile\_test.c}；
+  \item \texttt{cpp\_example.cpp}。
+\end{itemize}
+
+修改后的 \texttt{test/CMakeLists.txt} 整理如下：
+
+\subsubsection{项目语言}
+
+\begin{lstlisting}
+project(MUMPS_Example LANGUAGES C CXX Fortran)
+\end{lstlisting}
+
+定义项目名称，并声明项目使用C、C++和Fortran。
+
+\subsubsection{MPI和hwloc路径}
+
+\begin{lstlisting}
+link_directories(/usr/lib/x86_64-linux-gnu)
+set(MPI_INCLUDE_DIR /usr/lib/x86_64-linux-gnu/openmpi/include)
+set(MPI_C_LIBRARY /usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so)
+set(MPI_CXX_LIBRARY /usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi_cxx.so)
+
+set(HWLOC_LIBRARY /usr/lib/x86_64-linux-gnu/libhwloc.so)
+set(HWLOC_INCLUDE_DIR /usr/include)
+\end{lstlisting}
+
+如果CMake因为环境或版本问题找不到某些库，可以显式指定路径。配置顶层工程时也要保证这些依赖路径可见。
+
+\begin{lstlisting}
+include_directories(${MPI_INCLUDE_DIR} ${HWLOC_INCLUDE_DIR})
+\end{lstlisting}
+
+这条命令把MPI和hwloc头文件目录加入编译器搜索路径。
+
+\subsubsection{\texttt{mumps\_test}函数}
+
+\begin{lstlisting}
+set_property(DIRECTORY PROPERTY LABELS "unit;mumps")
+
+function(mumps_test name tgt)
+  if(parallel)
+    add_test(
+      NAME ${name}
+      COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 $<TARGET_FILE:${tgt}>
+    )
+  else()
+    add_test(NAME ${name} COMMAND ${tgt})
+  endif()
+endfunction()
+\end{lstlisting}
+
+\texttt{mumps\_test}接受两个参数：
+
+\begin{itemize}
+  \item \texttt{name}：CTest中的测试名称；
+  \item \texttt{tgt}：需要运行的CMake可执行目标。
+\end{itemize}
+
+当 \texttt{parallel} 为真时，测试命令包含：
+
+\begin{itemize}
+  \item \texttt{\$\{MPIEXEC\_EXECUTABLE\}}：MPI启动程序；
+  \item \texttt{\$\{MPIEXEC\_NUMPROC\_FLAG\}}：指定进程数的参数；
+  \item \texttt{2}：启动两个MPI进程；
+  \item \texttt{\$\textless{}TARGET\_FILE:\$\{tgt\}\textgreater{}}：目标可执行文件的完整路径。
+\end{itemize}
+
+当 \texttt{parallel} 为假时，CTest直接执行目标程序。
+
+\subsubsection{双精度配置测试}
+
+\begin{lstlisting}
+if(BUILD_DOUBLE)
+  add_executable(mumpscfg test_mumps.f90)
+  target_link_libraries(mumpscfg PRIVATE MUMPS::MUMPS)
+  mumps_test(Cfg mumpscfg)
+endif()
+\end{lstlisting}
+
+当启用双精度实数版本时：
+
+\begin{enumerate}
+  \item 从 \texttt{test\_mumps.f90} 创建 \texttt{mumpscfg}；
+  \item 将它链接到 \texttt{MUMPS::MUMPS}；
+  \item 注册名为 \texttt{Cfg} 的测试。
+\end{enumerate}
+
+\subsubsection{版本检查}
+
+\begin{lstlisting}
+if(MUMPS_UPSTREAM_VERSION VERSION_LESS 5.1)
+  return()
+endif()
+\end{lstlisting}
+
+如果上游MUMPS版本低于5.1，则停止处理当前CMakeLists。
+
+\subsubsection{单精度和双精度Fortran算例}
+
+\begin{lstlisting}
+if(BUILD_SINGLE)
+  add_executable(s_simple s_simple.f90)
+  target_link_libraries(s_simple PRIVATE MUMPS::MUMPS)
+  mumps_test(SimpleReal32 s_simple)
+endif()
+
+if(BUILD_DOUBLE)
+  add_executable(d_simple d_simple.f90)
+  target_link_libraries(d_simple PRIVATE MUMPS::MUMPS)
+  mumps_test(SimpleReal64 d_simple)
+endif()
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{s\_simple}对应单精度实数版本；
+  \item \texttt{d\_simple}对应双精度实数版本。
+\end{itemize}
+
+\subsubsection{C算例}
+
+\begin{lstlisting}
+add_executable(Csimple simple.c)
+target_link_libraries(Csimple PRIVATE MUMPS::MUMPS)
+mumps_test(CsimpleReal64 Csimple)
+\end{lstlisting}
+
+这三行从 \texttt{simple.c}创建 \texttt{Csimple}，链接MUMPS，并注册一个双精度实数C接口测试。
+
+\subsubsection{新增C/C++算例}
+
+\begin{lstlisting}
+add_executable(compile_test compile_test.c)
+target_link_libraries(compile_test PRIVATE MUMPS::MUMPS)
+
+add_executable(cpp_example cpp_example.cpp)
+target_link_libraries(cpp_example PRIVATE
+  ${HWLOC_LIBRARY}
+  ${MPI_C_LIBRARY}
+  ${MPI_CXX_LIBRARY}
+  MUMPS::MUMPS
+)
+\end{lstlisting}
+
+C++程序显式链接了hwloc、MPI C库、MPI C++库和MUMPS。
+
+\subsubsection{测试属性和Windows DLL}
+
+\begin{lstlisting}
+get_property(test_names DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
+set_property(TEST ${test_names} PROPERTY RESOURCE_LOCK cpu_mpi)
+set_property(TEST ${test_names} PROPERTY TIMEOUT 30)
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{get\_property}取得当前目录注册的全部测试；
+  \item \texttt{RESOURCE\_LOCK cpu\_mpi}防止多个测试同时占用同一MPI测试资源；
+  \item \texttt{TIMEOUT 30}把超时时间设为30秒。
+\end{itemize}
+
+\begin{lstlisting}
+if(WIN32 AND BUILD_SHARED_LIBS)
+  set_property(TEST ${test_names} PROPERTY
+    ENVIRONMENT_MODIFICATION
+    "PATH=path_list_append:${CMAKE_INSTALL_FULL_BINDIR};PATH=path_list_append:${CMAKE_PREFIX_PATH}/bin;PATH=path_list_append:${PROJECT_BINARY_DIR}"
+  )
+endif()
+\end{lstlisting}
+
+这段只在Windows共享库构建中生效，用于把DLL所在目录加入测试进程的 \texttt{PATH}。
+
+构建完成后，需要在 \texttt{build}目录中找到生成的可执行文件，或者使用 \texttt{ctest}运行已注册测试。
+
+\subsection{新建一个测试目录}
+
+\subsubsection{继续使用CTest框架}
+
+在 \texttt{mumps\_cxx}下新建目录，放入一个C源文件和一个简化的 \texttt{CMakeLists.txt}：
+
+\begin{lstlisting}
+set_property(DIRECTORY PROPERTY LABELS "unit;mumps")
+
+function(mumps_test name tgt)
+  if(parallel)
+    add_test(
+      NAME ${name}
+      COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2 $<TARGET_FILE:${tgt}>
+    )
+  else()
+    add_test(NAME ${name} COMMAND ${tgt})
+  endif()
+endfunction()
+
+if(MUMPS_UPSTREAM_VERSION VERSION_LESS 5.1)
+  return()
+endif()
+
+if(BUILD_DOUBLE)
+  add_executable(dotest testano.c)
+  target_link_libraries(dotest PRIVATE MUMPS::MUMPS)
+  mumps_test(doTEST dotest)
+endif()
+
+get_property(test_names DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
+set_property(TEST ${test_names} PROPERTY RESOURCE_LOCK cpu_mpi)
+set_property(TEST ${test_names} PROPERTY TIMEOUT 30)
+\end{lstlisting}
+
+还要在顶层 \texttt{CMakeLists.txt}中加入该子目录：
+
+\begin{lstlisting}
+include(cmake/summary.cmake)
+include(cmake/install.cmake)
+
+add_subdirectory(coderun)
+
+file(GENERATE OUTPUT .gitignore CONTENT "*")
+\end{lstlisting}
+
+重新构建后，可使用 \texttt{ctest}运行新程序。
+
+\subsubsection{构建完成后直接运行}
+
+如果不想使用CTest，可以为目标添加构建后命令：
+
+\begin{lstlisting}
+set_property(DIRECTORY PROPERTY LABELS "unit;mumps")
+
+if(MUMPS_UPSTREAM_VERSION VERSION_LESS 5.1)
+  return()
+endif()
+
+if(BUILD_DOUBLE)
+  add_executable(dotest testano.c)
+  target_link_libraries(dotest PRIVATE MUMPS::MUMPS)
+
+  add_custom_command(
+    TARGET dotest POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "Running dotest..."
+    COMMAND $<TARGET_FILE:dotest>
+    DEPENDS dotest
+  )
+endif()
+\end{lstlisting}
+
+这样执行 \texttt{cmake --build build}时，不仅会构建 \texttt{dotest}，还会在构建完成后立即运行它。
+
+\subsubsection{数值类型构建选项}
+
+\texttt{mumps-5.6.2.2/options.cmake}中包含：
+
+\begin{lstlisting}
+option(BUILD_SINGLE "Build single precision float32 real" ON)
+option(BUILD_DOUBLE "Build double precision float64 real" ON)
+option(BUILD_COMPLEX "Build single precision complex")
+option(BUILD_COMPLEX16 "Build double precision complex")
+\end{lstlisting}
+
+这些选项分别控制：
+
+\begin{longtable}{p{0.30\textwidth}p{0.62\textwidth}}
+\toprule
+\textbf{选项} & \textbf{数值类型} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{选项} & \textbf{数值类型} \\
+\midrule
+\endhead
+\texttt{BUILD\_SINGLE} & 单精度实数 \\
+\texttt{BUILD\_DOUBLE} & 双精度实数 \\
+\texttt{BUILD\_COMPLEX} & 单精度复数 \\
+\texttt{BUILD\_COMPLEX16} & 双精度复数 \\
+\bottomrule
+\end{longtable}
+
+配置中启用了单精度和双精度实数版本，没有启用复数版本。
+
+\section{算例编写}
+
+\subsection{\texttt{simple.c}研究}
+
+\texttt{test/simple.c}使用DMUMPS的C接口求解：
+
+\[
+A=\begin{bmatrix}1&0\\0&2\end{bmatrix},\qquad
+b=\begin{bmatrix}1\\4\end{bmatrix},\qquad
+x=\begin{bmatrix}1\\2\end{bmatrix}.
+\]
+
+完整代码如下：
+
+\subsubsection{头文件}
+
+\begin{lstlisting}[language=C]
+#include <stdio.h>
+#include <string.h>
+#include "mpi.h"
+#include "dmumps_c.h"
+\end{lstlisting}
+
+\texttt{dmumps\_c.h}位于：
+
+\begin{lstlisting}
+mumps-5.6.2.2/build/_deps/mumps-src/include/dmumps_c.h
+\end{lstlisting}
+
+它定义了双精度实数MUMPS的C接口，包括：
+
+\begin{itemize}
+  \item \texttt{DMUMPS\_STRUC\_C}参数结构体；
+  \item \texttt{dmumps\_c()}入口函数。
+\end{itemize}
+
+\begin{lstlisting}[language=C]
+void MUMPS_CALL dmumps_c(DMUMPS_STRUC_C *dmumps_par);
+\end{lstlisting}
+
+\subsubsection{宏常量}
+
+\begin{lstlisting}[language=C]
+#define JOB_INIT -1
+#define JOB_END -2
+#define USE_COMM_WORLD -987654
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{JOB\_INIT}：初始化MUMPS实例；
+  \item \texttt{JOB\_END}：终止MUMPS实例；
+  \item \texttt{USE\_COMM\_WORLD}：使用 \texttt{MPI\_COMM\_WORLD}。
+\end{itemize}
+
+\subsubsection{矩阵和右端项}
+
+\begin{lstlisting}[language=C]
+DMUMPS_STRUC_C id;
+MUMPS_INT n = 2;
+MUMPS_INT8 nnz = 2;
+MUMPS_INT irn[] = {1, 2};
+MUMPS_INT jcn[] = {1, 2};
+double a[2];
+double rhs[2];
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{n}：矩阵阶数；
+  \item \texttt{nnz}：非零元数量；
+  \item \texttt{irn/jcn}：非零元的1-based全局行列索引；
+  \item \texttt{a}：非零元数值；
+  \item \texttt{rhs}：右端项，求解完成后集中式解也写回该数组。
+\end{itemize}
+
+\texttt{MUMPS\_INT8}表示MUMPS使用的64位整数类型，不是8位整数。启用 \texttt{-DINTSIZE64}时，\texttt{MUMPS\_INT}也会变成64位；某些MPI C接口参数仍要求标准C \texttt{int}。
+
+\subsubsection{初始化MPI和MUMPS}
+
+\begin{lstlisting}[language=C]
+ierr = MPI_Init(&argc, &argv);
+ierr = MPI_Comm_rank(MPI_COMM_WORLD, &myid);
+
+id.comm_fortran = USE_COMM_WORLD;
+id.par = 1;
+id.sym = 0;
+id.job = JOB_INIT;
+dmumps_c(&id);
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{MPI\_Init}初始化MPI环境；
+  \item \texttt{MPI\_Comm\_rank}取得当前rank；
+  \item \texttt{comm\_fortran}指定MUMPS通信器；
+  \item \texttt{par=1}表示host也参与分解和求解；
+  \item \texttt{sym=0}选择非对称路径。虽然示例矩阵实际为对称对角阵，选择非对称路径仍可求解；
+  \item \texttt{job=-1}初始化MUMPS实例。
+\end{itemize}
+
+\subsubsection{只在host上提供集中式矩阵}
+
+\begin{lstlisting}[language=C]
+if (myid == 0) {
+  id.n = n;
+  id.nnz = nnz;
+  id.irn = irn;
+  id.jcn = jcn;
+  id.a = a;
+  id.rhs = rhs;
+}
+\end{lstlisting}
+
+默认集中式输入模式下，rank 0提供矩阵和右端项，其他rank参与MUMPS内部并行计算。
+
+\subsubsection{C数组下标与手册编号}
+
+\begin{lstlisting}[language=C]
+#define ICNTL(I) icntl[(I)-1]
+\end{lstlisting}
+
+手册中的控制参数从1开始编号，而C数组从0开始。该宏使代码可以继续使用手册中的编号，例如 \texttt{id.ICNTL(1)}实际访问 \texttt{id.icntl[0]}。
+
+\begin{lstlisting}[language=C]
+id.ICNTL(1) = -1;
+id.ICNTL(2) = -1;
+id.ICNTL(3) = -1;
+id.ICNTL(4) = 0;
+\end{lstlisting}
+
+示例关闭了主要输出信息。
+
+\subsubsection{分析、分解和求解}
+
+\begin{lstlisting}[language=C]
+id.job = 6;
+dmumps_c(&id);
+\end{lstlisting}
+
+\texttt{JOB=6}等价于依次执行：
+
+\begin{enumerate}
+  \item 分析；
+  \item 数值分解；
+  \item 求解。
+\end{enumerate}
+
+\subsubsection{错误检查和释放}
+
+\begin{lstlisting}[language=C]
+if (id.infog[0] < 0) {
+  fprintf(stderr,
+    " (PROC %d) ERROR RETURN: INFOG(1)= %d INFOG(2)= %d\n",
+    myid, id.infog[0], id.infog[1]);
+  return 1;
+}
+
+id.job = JOB_END;
+dmumps_c(&id);
+MPI_Finalize();
+\end{lstlisting}
+
+\texttt{INFOG(1)\textless{}0}表示调用失败，\texttt{INFOG(2)}通常提供附加错误信息。程序结束前先以 \texttt{JOB=-2}释放MUMPS实例，再调用 \texttt{MPI\_Finalize}。
+
+\subsection{JOB参数}
+
+在调用MUMPS前，所有MPI进程都要设置相同的 \texttt{JOB}。MUMPS不会修改该字段。
+
+\begin{longtable}{p{0.30\textwidth}p{0.62\textwidth}}
+\toprule
+\textbf{\texttt{JOB}} & \textbf{作用} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{\texttt{JOB}} & \textbf{作用} \\
+\midrule
+\endhead
+\texttt{-1} & 初始化；调用前先设置 \texttt{comm\_fortran}、\texttt{sym}和 \texttt{par} \\
+\texttt{-2} & 终止实例并释放内部资源 \\
+\texttt{1} & 分析矩阵结构 \\
+\texttt{2} & 数值分解，要求已有成功的分析结果 \\
+\texttt{3} & 求解，要求已有成功的数值分解 \\
+\texttt{4} & 分析和数值分解 \\
+\texttt{5} & 数值分解和求解 \\
+\texttt{6} & 分析、数值分解和求解 \\
+\texttt{7} & 把MUMPS内部实例保存到磁盘 \\
+\texttt{-3} & 删除保存到磁盘的实例数据 \\
+\texttt{8} & 从磁盘恢复MUMPS实例 \\
+\texttt{-4} & 释放数值阶段数据，但保留分析阶段结构 \\
+\texttt{9} & 在求解前计算分布式右端项的可能分布 \\
+\bottomrule
+\end{longtable}
+
+\texttt{JOB=9}只能在成功完成分解，即 \texttt{JOB=2/4}返回且 \texttt{INFOG(1)\textgreater{}=0}后使用。
+
+\subsection{PAR参数}
+
+\texttt{PAR}的取值为：
+
+\begin{itemize}
+  \item \texttt{PAR=0}：host不参加分解和求解的并行计算，主要负责初始问题、分析协调、数据分发和结果收集；
+  \item \texttt{PAR=1}：host也参加分解和求解；其他值按1处理。
+\end{itemize}
+
+所有进程应提供相同的 \texttt{PAR}。如果不一致，MUMPS使用rank 0上的值。
+
+当矩阵集中在rank 0且输入规模很大时，\texttt{PAR=1}可能让rank 0同时承担原始矩阵和数值工作区，从而造成内存不均衡。
+
+\subsection{矩阵输入格式}
+
+详细接口可以参考 MUMPS Users' Guide 第5.2节。
+
+\subsubsection{三类输入结构}
+
+\begin{lstlisting}[language=C]
+/* Assembled entry */
+MUMPS_INT      nz;
+MUMPS_INT8     nnz;
+MUMPS_INT      *irn;
+MUMPS_INT      *jcn;
+DMUMPS_COMPLEX *a;
+
+/* Distributed entry */
+MUMPS_INT      nz_loc;
+MUMPS_INT8     nnz_loc;
+MUMPS_INT      *irn_loc;
+MUMPS_INT      *jcn_loc;
+DMUMPS_COMPLEX *a_loc;
+
+/* Element entry */
+MUMPS_INT      nelt;
+MUMPS_INT      *eltptr;
+MUMPS_INT      *eltvar;
+DMUMPS_COMPLEX *a_elt;
+\end{lstlisting}
+
+\subsubsection{SYM}
+
+\texttt{SYM}指定矩阵类型：
+
+\begin{itemize}
+  \item \texttt{0}：非对称矩阵；
+  \item \texttt{1}：对称正定矩阵，使用不进行数值主元搜索的正定路径；
+  \item \texttt{2}：一般对称矩阵；
+  \item 其他值按0处理。
+\end{itemize}
+
+所有进程应提供相同的 \texttt{SYM}，否则使用rank 0上的值。MUMPS不提供专门的Hermitian矩阵模式。

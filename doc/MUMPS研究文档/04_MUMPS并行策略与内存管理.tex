@@ -1,0 +1,507 @@
+\chapter{MUMPS 并行策略与内存管理}
+
+MUMPS 采用异步多波前并行方法。分析阶段建立消去树映射、节点 owner 和大型节点的候选进程集合；数值分解阶段依据依赖满足情况、消息到达顺序和受限的运行时负载信息调度任务。因此，其并行组织是静态映射与动态任务调度的结合，而不是完全静态的层同步，也不是允许任意进程接管任意节点的全局工作窃取\cite{mumpsguide,amestoy2001,amestoy2006}。
+
+\section{进程、线程与数据分布}
+
+\subsection{MPI 工作进程}
+
+MUMPS 初始化时已经知道 MPI 通信域大小和 \code{PAR}。若 \code{PAR=1}，host rank 同时是工作进程；若 \code{PAR=0}，host 不承担数值工作，其余 rank 组成工作通信域。内部量 \code{NSLAVES} 或 \code{SLAVEF} 表示工作进程数。该数量在区分 Type 1 和 Type 2 节点之前已经确定，因此节点分类不参与决定 MPI 进程总数。
+
+master、slave、owner 和 candidate 都是 MPI rank 在特定任务中的角色，不等同于物理计算节点。一台机器上可以运行多个 MPI rank，一个 rank 在不同波前中也可以承担不同角色。
+
+\subsection{三类并行来源}
+
+MUMPS 中可以同时出现三类并行：
+
+\begin{enumerate}
+  \item 消去树并行：不同 MPI 进程同时处理不同树枝上的波前；
+  \item 波前内部 MPI 并行：一个大型 Type 2 波前由一个 master 和若干参与进程协同处理；
+  \item MPI 进程内部线程并行：多线程 BLAS 以及 MUMPS 的部分 OpenMP 区域在同一 rank 的共享地址空间中执行。
+\end{enumerate}
+
+第一、二项是 MPI 进程间并行，第三项是进程内共享内存并行。混合版本的线程并行主要来自多线程 BLAS，同时包含若干由 OpenMP 实现的并行区域\cite{mumpsguide}。
+
+\section{分析阶段的节点代价}
+
+\subsection{单个波前的规模}
+
+在 \src{mumps\_static\_mapping.F} 中，\src{MUMPS\_TREECOSTS} 对节点 \code{pos} 取得
+
+\[
+p=\code{npiv},\qquad f=\code{nfront},
+\]
+
+其中 $p$ 是节点计划消去的变量数，$f$ 是波前总阶数，贡献块的预测阶数为
+
+\[
+c=f-p.
+\]
+
+调用
+
+\begin{lstlisting}[language=Fortran]
+CALL MUMPS_CALCNODECOSTS(
+    npiv,
+    nfront,
+    cv_ncostw(pos),
+    cv_ncostm(pos))
+\end{lstlisting}
+
+后，\code{cv\_ncostw(pos)} 保存该节点的计算量估计，\code{cv\_ncostm(pos)} 保存该节点的因子存储量估计。这里的“计算量”是稠密主元块分解、三角求解和 Schur 补更新的浮点运算估计；“因子存储量”是该节点预计保留的因子数值个数，不是进程已经申请的字节数。
+
+MUMPS 5.6.2 的普通非低秩路径使用以下公式。一般非对称矩阵为
+
+\[
+\begin{aligned}
+W_v={}&2fp(f-p-1)
++\frac{p(p+1)(2p+1)}{3}
++\frac{(2f-p-1)p}{2},\\
+M_v={}&p(2f-p).
+\end{aligned}
+\]
+
+对称矩阵为
+
+\[
+\begin{aligned}
+W_v={}&p\left[
+f^2+2f-(f+1)(p+1)
++\frac{(p+1)(2p+1)}{6}
+\right],\\
+M_v={}&pf.
+\end{aligned}
+\]
+
+实现将 $W_v,M_v$ 分别存入 \code{cv\_ncostw} 和 \code{cv\_ncostm}。这两个数用于分析阶段的相对负载比较和节点映射\cite{mumpssource}。
+
+\subsection{子树累计代价}
+
+\src{MUMPS\_TREECOSTS} 递归遍历实际子节点，定义
+
+\[
+T^W_v=W_v+\sum_{c\in\operatorname{child}(v)}T^W_c,
+\qquad
+T^M_v=M_v+\sum_{c\in\operatorname{child}(v)}T^M_c.
+\]
+
+对应数组为 \code{cv\_tcostw(v)} 和 \code{cv\_tcostm(v)}。单节点代价用于普通层中的节点映射；累计代价用于把一个完整的 Level-0 子树作为整体映射。分析阶段使用这些估计更新每个进程的累计工作量
+
+\[
+\code{cv\_proc\_workload(proc)}
+\]
+
+和累计内存量
+
+\[
+\code{cv\_proc\_memused(proc)}.
+\]
+
+\section{Level-0 子树映射}
+
+Level-0 不是“树深度等于 0 的所有节点”，也不是“只由一个进程执行的一棵唯一子树”。它是消去树底部的一组互不重叠子树。每棵 Level-0 子树有一个边界根；该根以下的全部后代属于同一子树。
+
+\src{MUMPS\_ROOTLIST} 先从消去树根列表开始，\src{MUMPS\_LAYERL0} 再把当前边界逐步向叶方向展开，形成数量足够、代价可分配的树底子树。因此，构造过程从根列表开始细化，而最终得到的是靠近叶侧的子树划分。
+
+标准路径中的 Level-0 最小候选数量为
+
+\[
+\code{MINSIZE\_L0}=3\,\code{SLAVEF}.
+\]
+
+内部控制路径还可以取 $6\,\code{SLAVEF}$ 或 $2\,\code{SLAVEF}$。这些值控制映射阶段希望形成的 Level-0 边界规模，不表示每个进程只能获得一棵子树。
+
+\src{MUMPS\_ARRANGEL0} 按子树累计代价调用 \src{MUMPS\_FIND\_BEST\_PROC}：
+
+\[
+\text{Level-0 根 }r
+\longmapsto
+\operatorname*{argmin}_{q\in\mathcal P}
+\{\text{当前累计负载或内存}\},
+\]
+
+同时受进程可用性和内存约束限制。确定边界根的 owner 后，\src{MUMPS\_MAPSUBTREE} 调用 \src{MUMPS\_MAPBELOW}，递归执行
+
+\[
+\code{procnode(descendant)}=
+\code{procnode(subtree\_root)}.
+\]
+
+例如，若 Level-0 根 $A$ 被映射到 rank 2，则 $A$ 以下的 $B,C,D,E$ 也映射到 rank 2。该子树内部的贡献块在同一 MPI 地址空间中装配；一个 rank 可以拥有多棵 Level-0 子树。
+
+\section{普通层、节点类型与阈值}
+
+\subsection{layernmb}
+
+\code{layernmb} 是静态映射算法中的层编号。它不是 MPI rank，也不是树的数学深度数组。
+
+\code{layernmb=0} 对应 Level-0 子树层；正值表示 Level-0 边界以上依次处理的映射层。
+
+\src{MUMPS\_FIND\_THISLAYER} 产生该层的节点列表，随后执行节点分类、代价处理和进程映射。
+
+\subsection{Type 0 和 Type 1}
+
+多进程情况下，Level-0 边界根被标记为 Type 0，其后代在内部标记为 (-1)，最终继承同一个 owner。只有一个工作进程时，源码把所有节点设为 Type 0。
+
+Level-0 以上不满足 Type 2 条件、且未被指定为特殊 Type 3 的节点被设为 Type 1。Type 1 节点只有一个 owner；该进程负责装配波前、执行主要分解、保存因子并产生贡献块。
+
+\subsection{Type 2 的精确判据}
+
+\src{MUMPS\_ASSIGN\_TYPES} 中，普通层节点成为 Type 2 需要同时满足：
+
+\[
+f-p>\code{KEEP(9)},
+\]
+
+\[
+\code{ICNTL(59)}=0,
+\]
+
+并且源码变量 \code{in.ne.0}，即该节点具有实际子节点。
+
+MUMPS 5.6.2 的 \src{MUMPS\_ISTYPE2BYSIZE} 还写有
+
+\begin{lstlisting}[language=Fortran]
+((npiv > cv_keep(4)).or.(.TRUE.))
+\end{lstlisting}
+
+因此 \code{KEEP(4)} 对 Type 2 判定实际不构成限制。标准默认值为：
+
+\begin{table}[htbp]
+\centering
+\caption{MUMPS 5.6.2 标准默认节点阈值}
+\label{tab:type2-threshold}
+\begin{tabular}{lcc}
+\toprule
+矩阵类别 & \code{KEEP(4)} & \code{KEEP(9)} \\
+\midrule
+一般非对称 & 32 & 700 \\
+对称 & 24 & 400 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+所以在标准默认值下，Type 2 的有效规模条件是：
+
+\[
+\begin{cases}
+f-p>700, & \text{一般非对称},\\
+f-p>400, & \text{对称},
+\end{cases}
+\]
+
+再加上“有实际子节点”和“\code{ICNTL(59)=0}”。不满足这些条件的普通节点为 Type 1。内部选项可以修改 \code{KEEP} 值，因此上述数字对应 MUMPS 5.6.2 双精度版本的标准默认设置\cite{mumpssource}。
+
+\subsection{Type 3}
+
+Type 3 不是“消去树根”的同义词。选择过程先在所有满足 \code{FRERE(i)=0} 的结构根中找到预计波前最大的根，记其阶数为 \code{SIZEROOT}。标准自动模式下，只有同时满足以下条件才将该根标记为 Type 3：
+
+\begin{enumerate}
+  \item 构建时启用了 ScaLAPACK；
+  \item \code{ICNTL(13)=0}，允许并行处理最后的根稠密块；
+  \item 工作进程数 \code{SLAVEF}>1；
+  \item \code{SIZEROOT}>\code{SLAVEF}；
+  \item \code{SIZEROOT}>\code{KEEP(37)}。
+\end{enumerate}
+
+默认阈值为
+
+\[
+\code{KEEP(37)}=
+\max\!\left(800,\left\lfloor70\sqrt{\code{NSLAVES}+1}\right\rfloor\right).
+\]
+
+因此，根节点不一定是 Type 3，但 Type 3 一定是所选消去树的结构根。其 \code{procnode} 中仍记录协调进程，而根矩阵和数值计算随后分布到二维 BLACS/ScaLAPACK 进程网格\cite{mumpssource}。
+
+\section{owner 与 Type 1 映射}
+
+这里的“映射”是建立
+
+\[
+\text{消去树节点或子树}
+\longrightarrow
+\text{负责进程及允许参与的进程集合}
+\]
+
+的关系。owner 是某个节点的主要负责 rank。对 Type 1，owner 是唯一执行该节点主要数值任务并保存因子的进程；对子节点贡献位于其他 rank 的情况，贡献块通过 MPI 发送到父节点 owner。
+
+\src{MUMPS\_MAP\_LAYER} 先按当前映射目标对节点代价排序，再由 \src{MUMPS\_SORTPROCS} 排列进程。若按浮点工作量平衡，则当前累计工作量小的进程靠前；若按内存平衡，则当前累计内存小的进程靠前；启用优选进程集合时，该集合排在普通进程之前。
+
+对一个 Type 1 节点 $i$，映射器依次检查排序后的进程，选择第一个满足工作量和内存上限的进程 $q$：
+
+\[
+\code{cv\_procnode(i)}=q.
+\]
+
+随后更新
+
+\[
+\code{cv\_proc\_workload(q)}\mathrel{+}=W_i,
+\qquad
+\code{cv\_proc\_memused(q)}\mathrel{+}=M_i.
+\]
+
+这一步使用分析估计，不是对数值分解实际时间和内存的测量。
+
+\section{Type 2 的 owner、候选进程与 CANDIDATES}
+
+Type 2 节点既有一个 master/owner，也有若干候选工作进程。候选数量由 MUMPS 内部的块 2 进程数模型根据 \code{SLAVEF}、矩阵类别、$f$、$f-p$ 以及相关内部控制量计算，不需要先知道节点类型来确定 MPI 总进程数。
+
+分析结束时，所有 Type 2 及分裂链相关节点依次写入
+
+\[
+\code{PAR2\_NODES(INIV2)}.
+\]
+
+公开数组
+
+\[
+\code{CANDIDATES(NSLAVES+1,NB\_NIV2)}
+\]
+
+的第 \code{INIV2} 列描述 \code{PAR2\_NODES(INIV2)} 对应节点。若
+
+\[
+\code{PAR2\_NODES(3)}=25,
+\]
+
+则 \code{INIV2=3} 只表示“第三列候选信息属于节点 25”，不是第三个 MPI rank，也不是第三层。
+
+令
+
+\[
+n_c=\code{CANDIDATES(NSLAVES+1,INIV2)}.
+\]
+
+前 $n_c$ 项保存主要候选进程的 0-based 工作通信域 rank。例：
+
+\[
+\code{CANDIDATES(:,3)}=
+[0,2,5,-1,\ldots,3]^T
+\]
+
+表示节点 25 的主要候选进程为 rank 0、2、5，最后一项 3 是候选数量。对 Type 2 分裂链，主要候选项之后还可以保存额外参与者；负值标记该扩展列表的结束，解释时需要结合节点的分裂类型。
+
+\src{MUMPS\_RETURN\_CANDIDATES} 把内部候选表复制到 \code{id\%CANDIDATES}。\src{dana\_driver.F} 随后广播 \code{PAR2\_NODES} 和 \code{CANDIDATES}，并在每个 rank 上建立“本 rank 是否为候选”的辅助信息。
+
+Type 2 在数值分解中使用候选集合进行波前内部协作。分析阶段的候选集合并不等于最终实际参与集合。数值分解建立该节点时，根据实际 \code{NFRONT}、贡献块规模、累计负载和内存状态确定 \code{NSLAVES} 及实际进程表。在强制候选约束的路径中，
+
+\[
+\{\text{actual slaves}\}\subseteq\{\text{candidate ranks}\};
+\]
+
+部分内部策略不强制候选约束，此时选择范围可以扩大到 master 之外的更多工作 rank。无论采用哪条路径，实际进程表一经确定，因子块就按该表分布；随后的前代和回代直接复用实际进程表，不再重新寻找空闲 rank\cite{mumpssource}。
+
+\section{PROCNODE\_STEPS 的含义}
+
+分析阶段把节点顺序转换成数值分解使用的 \code{STEP} 顺序，并生成
+
+\[
+\code{id\%PROCNODE\_STEPS(step)}.
+\]
+
+该整数不是单纯的 MPI rank。\src{MUMPS\_ENCODE\_PROCNODE} 通过 \src{MUMPS\_ENCODE\_TPN\_IPROC} 把节点类型和 0-based owner rank 编码到同一个整数中。使用时，源码分别通过解码函数取得 owner 或节点类型，例如
+
+\[
+\code{MUMPS\_PROCNODE(PROCNODE\_STEPS(step),KEEP(199))}
+\]
+
+返回 owner rank。因而 Fortran 表达式
+
+\begin{lstlisting}[language=Fortran]
+id%PROCNODE_STEPS(step)
+\end{lstlisting}
+
+表示 MUMPS 实例 \code{id} 中第 \code{step} 个数值分解步骤的“类型+owner”编码项；\code{\%} 是 Fortran 派生类型的成员访问符，括号是数组下标。
+
+\section{数值分解阶段的 MPI 组织}
+
+\subsection{初始数据分布}
+
+集中式输入时，矩阵最初位于 host；分布式输入时，各 rank 已持有自己的输入项。分析完成后，MUMPS 根据 \code{PROCNODE\_STEPS} 和波前索引把原矩阵项发送到相应 owner。分解阶段不要求每个 rank 保存完整矩阵；每个 rank 保存映射给自己的矩阵项、波前、贡献块和因子。
+
+\subsection{就绪条件}
+
+每个父节点都有尚未完成的依赖计数 \code{NSTK\_STEPS}。一个子节点完成且其结果在父 owner 上处理后，源码执行
+
+\[
+\code{NSTK\_STEPS(STEP(parent))}
+\leftarrow
+\code{NSTK\_STEPS(STEP(parent))}-1.
+\]
+
+当计数变为 0 时，调用 \src{DMUMPS\_INSERT\_POOL\_N} 把父节点插入本地就绪池。这里的“0”表示该父节点需要的所有子贡献均已处理，不表示同一深度的所有节点均已完成。
+
+\subsection{异步主循环}
+
+\src{DMUMPS\_FAC\_PAR} 中，每个工作 rank 在未完成任务存在时交替进行：
+
+\begin{enumerate}
+  \item 检查并处理到达的 MPI 消息；
+  \item 在没有待处理消息时，从本地就绪池中选择节点；
+  \item 装配和分解该节点；
+  \item 保存本地因子，把贡献块或控制信息发送给父节点或相关参与进程；
+  \item 更新本地负载状态和依赖计数。
+\end{enumerate}
+
+不同树枝的 Type 0/1 节点可以同时运行。Type 2 节点由 master 负责主元和任务控制，候选进程处理其持有的面板或更新数据；因而消去树并行与一个大型波前内部的 MPI 并行可以重叠。
+
+分析映射和运行时调度的边界如下：
+
+\begin{itemize}
+  \item Type 0/1 节点的 owner 在分析阶段确定，分解阶段仍在该 owner 上处理；
+  \item Type 2 的允许参与集合在分析阶段确定，运行时在该集合内进行动态协作；
+  \item 本地就绪池在多个已映射到本 rank 的可执行节点之间选择任务；
+  \item 消息到达时间和实际负载决定节点何时就绪以及候选进程何时参与。
+\end{itemize}
+
+这里的动态性体现在就绪次序、消息推进和 Type 2 实际参与进程的受限选择上；Type 0/1 的 owner 关系仍保持分析阶段的映射结果。
+
+\subsection{Type 0/1：树间并行与进程内计算}
+
+Level-0 子树内部的节点具有同一 owner，子贡献通常直接保留在该 rank 的工作区中；不同 Level-0 子树则可以在不同 rank 上同时推进。一个 rank 可以拥有多棵 Level-0 子树，也可以拥有多个上层 Type 1 节点。
+
+Type 1 节点由唯一 owner 完成装配、主元选择、面板分解、Schur 补更新和因子保存。若父子 owner 不同，子节点将贡献块及其索引发送给父节点 owner。Type 1 的 MPI 并行来自不同 rank 同时处理消去树的不同波前，而不是把单个 Type 1 波前拆分到多个 rank。
+
+\subsection{Type 2：master/slave 波前内部并行}
+
+Type 2 master 在节点真正建立时选择实际 slaves，并记录每个参与进程负责的块行范围。master 负责波前控制、主元选择和主元面板分解；实际 slaves 保存分配给自己的因子或更新块，并接收已分解面板。对第 $k$ 个面板，参与进程并行执行局部更新
+
+\[
+C_q\leftarrow C_q-L_qU_k,
+\]
+
+其中 $C_q$ 和 $L_q$ 是 rank $q$ 持有的局部块。master 分解后续面板时，其他 rank 可以继续处理前一面板的更新，从而形成面板分解与尾部更新的流水线。候选进程只有在被选入实际 slave 表后才保存相应数据并参加该节点计算。
+
+\subsection{Type 3：二维分布的根波前}
+
+进入 Type 3 根之前，子节点贡献块按照根矩阵的二维块循环分布拆分并发送到相应网格进程，而不是全部集中到协调 rank。各网格进程装配自己的局部根矩阵后，共同建立 ScaLAPACK 描述符并执行并行稠密分解。一般非对称根调用 \code{PDGETRF}，对称正定根调用 \code{PDPOTRF}；未参加根网格的 rank 不持有根矩阵局部块。
+
+三类执行路径构成从树底到树根的并行性转换：树底主要依靠大量独立波前并行，树的中上部依靠 Type 2 波前内部协作，满足条件的根波前使用二维进程网格并行。
+
+\section{延迟主元和估计偏差对调度的影响}
+
+延迟主元使贡献块和祖先波前大于符号估计，因此增加实际浮点运算、通信数据量和进程本地内存。分析阶段已经生成的 owner、Type 2 候选表和树父子关系不会因此整体重做。
+
+若 Type 1 节点因延迟变大，其 owner 不会被普通运行时路径迁移到另一个空闲 rank；该 owner 继续处理实际波前。若 Type 2 节点变大，运行时仍受该节点的实际参与表和所选候选策略约束。强制候选约束时只能从候选表中选择；不强制候选约束的内部路径可以扩大初次选择范围，但并不构成分解过程中的任意工作迁移。
+
+当估计负载与实际负载存在差异时，空闲进程可以执行已经映射到本 rank 的其他就绪子树，在建立 Type 2 节点时被选为实际 slave，或者继续推进通信。此类动态行为不改变 Type 1 的 owner 关系，也不会在求解阶段把未持有因子的空闲 rank 临时加入已有节点。
+
+因此，延迟主元的并行代价包括：父链上的额外计算、较大的贡献块消息、额外装配与内存移动，以及静态估计与实际工作量不一致造成的进程等待。
+
+\section{求解阶段的 MPI 并行}
+
+分解结束后，因子继续分布在生成它们的 rank 上。求解阶段不先把完整 $L,U,D$ 集中到 host，而是沿因子和消去树依赖通信。
+
+\subsection{前代}
+
+一般非对称前代求解
+
+\[
+Ly=Pb,
+\]
+
+对称情形还要处理 $D$。每个 rank 初始化自己所拥有节点的未完成子依赖计数，并把叶节点加入就绪池。树底不同子树可以同时访问各自保存的因子；一个节点完成局部三角求解和接口变量更新后，将父节点需要的贡献向量发送给父 owner。若父子同属一个 rank，则直接累加到该 rank 的压缩右端项工作区；若 owner 不同，则通过 MPI 发送。父节点在所有子贡献到达后进入就绪池。
+
+Type 2 节点的 master 解出或分发主元相关向量，实际 slaves 使用各自保存的局部因子块并行形成部分更新。通信只传递求解所需的向量和控制信息，不重新传输完整因子。
+
+前代到达 Type 3 根后，右端项按根进程网格的分布方式组织；一般非对称和对称正定路径分别使用 ScaLAPACK 根因子求解例程处理分布式根系统。
+
+\subsection{回代}
+
+回代求解
+
+\[
+Ux=y
+\quad\text{或}\quad
+L^Tx=z.
+\]
+
+依赖方向与分解和前代相反：父节点先得到所需解分量，再把子节点更新所需的数据发送给对应 owner；不同树枝收到父级数据后可以并行展开。普通节点只等待父节点提供接口解，不需要再次等待其全部子节点，因此一个父节点完成后可以同时释放多个子树。
+
+Type 2 回代采用“分发--局部更新--归并”方式。master 向实际 slaves 发送接口解，各 slave 用自己的因子块计算部分右端项更新，master 汇总这些更新后完成主元块回代。这里使用的是分解阶段写入节点因子头的实际 slave 表，而不是分析阶段的 \code{CANDIDATES}。
+
+Type 3 根的因子与右端项按二维网格分布，根求解完成后再将所需接口解发送到根以下的节点。一般非对称和对称正定路径分别使用 \code{PDGETRS} 和 \code{PDPOTRS}。
+
+\code{ICNTL(20)} 控制右端项的集中式、稀疏或分布式输入形式，\code{ICNTL(21)} 控制解的集中式或分布式返回。多个右端项使节点局部的向量更新变为矩阵更新，并调用相应的 BLAS-3 核。
+
+求解阶段不再进行主元选择，也不会产生新的延迟主元。数值分解中已经发生的延迟会通过实际因子规模、因子所在 rank 和树上的通信量影响求解。
+
+\section{MPI 进程私有内存与无冲突访问}
+
+MPI rank 具有独立虚拟地址空间。不同 rank 上同名的 Fortran 数组不是同一对象，因此两个进程对各自 \code{A(100)} 的写入不会发生共享内存冲突。跨进程数据只通过 MPI 发送、接收、广播或集合通信转移。
+
+经典分解路径中，每个 rank 主要维护：
+
+\begin{itemize}
+  \item 实数或复数工作数组 \code{A}：本地波前、因子、贡献块和数值工作区；
+  \item 整数工作数组 \code{IW}：节点头、行列索引、长度、状态和位置描述；
+  \item \code{PTRFAC/PTRAST/PTRIST/PTLUST} 等节点位置数组；
+  \item MPI 发送与接收缓冲；
+  \item 本 rank 所需的右端项和解片段。
+\end{itemize}
+
+这些位置量是进程私有 Fortran 数组的下标或偏移，不是跨 MPI rank 有效的共享指针。MUMPS 通常不是为每个节点建立一个独立堆对象，而是在每个 rank 的大工作数组中连续或分区存放多个节点的数据，再通过位置数组定位。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[font=\small]
+  \draw[thick] (0,0) rectangle (11,1.35);
+  \fill[MumpsBlue!16] (0,0) rectangle (3.1,1.35);
+  \fill[MumpsCyan!15] (3.1,0) rectangle (6.6,1.35);
+  \fill[MumpsRed!13] (6.6,0) rectangle (9.2,1.35);
+  \fill[gray!15] (9.2,0) rectangle (11,1.35);
+  \draw (3.1,0)--(3.1,1.35);
+  \draw (6.6,0)--(6.6,1.35);
+  \draw (9.2,0)--(9.2,1.35);
+  \node at (1.55,0.675) {已保存因子};
+  \node at (4.85,0.675) {活动波前与工作区};
+  \node at (7.9,0.675) {贡献块};
+  \node at (10.1,0.675) {空闲区};
+  \draw[decorate,decoration={brace,amplitude=5pt},yshift=3pt]
+    (0,1.35)--(11,1.35)
+    node[midway,yshift=0.46cm] {单个 MPI rank 的本地数值工作空间示意};
+\end{tikzpicture}
+\caption{因子、活动数据和贡献块位于各 rank 自己的地址空间。}
+\label{fig:local-memory}
+\end{figure}
+
+因子和贡献块具有不同生命周期。节点分解完成后，主元块、耦合因子、置换信息和索引一直保留到求解结束；贡献块只用于父节点装配，完成装配后即可释放或复用。父节点不会把子节点因子并入自己的因子区，而只接收子节点的贡献块。全局 $L,U$ 或 $L,D$ 因子由分布在多个 rank 上的节点因子块及其索引共同表示。
+
+\subsection{MPI 发送和接收缓冲}
+
+跨 rank 的贡献块、面板和求解向量必须经过消息缓冲。非阻塞发送返回后，MPI 可能仍在读取发送数据，因此相应缓冲区在请求完成前不能复用。MUMPS 将已打包消息与 \code{MPI\_Request} 一起记录，并通过 \code{MPI\_TEST} 或等价的完成检查确认发送结束；只有请求完成后，该环形缓冲区块才重新进入空闲状态。
+
+接收端先探测消息类型和长度，再把一条消息接收到进程私有缓冲区并解包。普通事件循环一次处理一条接收消息，因此不会由多个 MPI 接收同时覆盖同一缓冲区。由此，进程间的无冲突性来自两个层次：不同 rank 的地址空间彼此隔离；同一 rank 内尚未完成的非阻塞通信缓冲受请求状态保护。
+
+\section{贡献块申请、复用与压缩}
+
+贡献块具有有限生命周期：子节点完成后生成，在父节点装配后可以释放；数值因子通常保留到求解结束。\src{DMUMPS\_ALLOC\_CB} 根据整数描述长度和贡献块数值长度申请本地空间。若当前连续空闲区不足，内存路径可以执行以下操作：
+
+\begin{enumerate}
+  \item 使用允许的子节点区域或栈区域进行原位放置；
+  \item 回收已经装配完成、不再需要的贡献块；
+  \item 移动可移动对象并压缩空洞；
+  \item 使用动态贡献块存储路径；
+  \item 在仍无法满足请求时返回内存错误。
+\end{enumerate}
+
+\code{IPTRLU/LRLU/IWPOS/IWPOSCB/POSFAC} 等变量维护本地工作数组边界、剩余长度和当前因子位置。压缩只修改本 rank 的数组和本地位置记录，不修改其他 MPI rank 的地址。
+
+延迟发生时，实际主元数小于计划主元数，贡献块必须同时保存普通更新变量和延迟变量。\src{DMUMPS\_FAC\_STACK} 根据实际贡献块计算可复用区和移动边界。延迟可能使原位空间不足，从而触发更大的贡献块申请、因子或贡献块移动以及更高的内存高水位。
+
+\section{内存控制与 out-of-core}
+
+主要内存控制参数包括：
+
+\begin{itemize}
+  \item \code{ICNTL(14)}：规定数值阶段工作空间相对分析估计的增加百分比；
+  \item \code{ICNTL(23)}：规定每个工作进程允许使用的内部工作内存上限，单位为 MB；
+  \item \code{ICNTL(22)}：选择 in-core 或 out-of-core 因子存储。
+\end{itemize}
+
+当 \code{ICNTL(23)=0} 时，各进程依据分析估计和 \code{ICNTL(14)} 分配工作空间；当其为正数时，MUMPS 在给定的每进程上限内安排整数工作区、实数或复数主工作区、通信缓冲和动态存储。\code{ICNTL(14)} 的默认值随 MPI 进程数而变化，通常在 $20\%$ 至 $35\%$ 之间；单进程对称正定情形的默认值为 $5\%$。数值主元导致额外填充时，可以提高该松弛比例\cite{mumpsguide}。
+
+out-of-core 模式把完整秩数值因子写入各 rank 管理的磁盘文件；求解阶段在使用相应因子时再读取。活动波前、贡献块、通信缓冲和分解工作区仍需要进程私有内存。分析阶段的内存估计用于决定工作数组和数据分布，数值分解后的统计量则反映延迟主元、实际主元和运行时存储路径共同形成的实际使用量。
+
+同一 MPI rank 内启用 OpenMP 时，各线程共享该 rank 的地址空间。共享统计量和池状态由 MUMPS 的线程区域划分及必要的原子/同步操作维护；多线程 BLAS 内部的数据划分由所链接的 BLAS 实现负责。MPI rank 之间则依靠地址空间隔离保证本地工作数组互不冲突。

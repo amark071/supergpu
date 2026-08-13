@@ -182,6 +182,12 @@ struct DeviceLargePanelState {
     int delay_current;
 };
 
+struct DeviceFrontIdCopy {
+    const int* source;
+    std::size_t destination_offset;
+    int count;
+};
+
 __device__ float absf(float value)
 {
     return value < 0.0f ? -value : value;
@@ -194,32 +200,32 @@ __device__ float lowerValue(const float* matrix, int ld, int row, int col)
     return matrix[r + c * ld];
 }
 
-__device__ int binaryFind(
-    const int* sorted_ids,
-    const int* sorted_positions,
-    int count,
-    int id)
+__global__ void setFrontPositionsKernel(
+    const int* ids,
+    int order,
+    int* global_to_local)
 {
-    int left = 0;
-    int right = count;
-    while (left < right) {
-        const int middle = left + (right - left) / 2;
-        const int candidate = sorted_ids[middle];
-        if (candidate < id) {
-            left = middle + 1;
-        } else {
-            right = middle;
-        }
+    const int position = blockIdx.x * blockDim.x + threadIdx.x;
+    if (position < order) {
+        global_to_local[ids[position]] = position;
     }
-    return left < count && sorted_ids[left] == id ? sorted_positions[left] : -1;
+}
+
+__global__ void clearFrontPositionsKernel(
+    const int* ids,
+    int order,
+    int* global_to_local)
+{
+    const int position = blockIdx.x * blockDim.x + threadIdx.x;
+    if (position < order) {
+        global_to_local[ids[position]] = -1;
+    }
 }
 
 __global__ void scatterBaseEntriesKernel(
     float* front,
     int ld,
-    const int* sorted_ids,
-    const int* sorted_positions,
-    int id_count,
+    const int* global_to_local,
     const int* rows,
     const int* cols,
     const float* values,
@@ -230,10 +236,8 @@ __global__ void scatterBaseEntriesKernel(
     if (entry >= end) {
         return;
     }
-    const int local_row = binaryFind(
-        sorted_ids, sorted_positions, id_count, rows[entry]);
-    const int local_col = binaryFind(
-        sorted_ids, sorted_positions, id_count, cols[entry]);
+    const int local_row = global_to_local[rows[entry]];
+    const int local_col = global_to_local[cols[entry]];
     if (local_row < 0 || local_col < 0) {
         return;
     }
@@ -247,9 +251,7 @@ __global__ void scatterBaseEntriesKernel(
 __global__ void extendAddKernel(
     float* parent,
     int parent_ld,
-    const int* sorted_parent_ids,
-    const int* sorted_parent_positions,
-    int parent_order,
+    const int* global_to_local,
     const float* child,
     const int* child_ids,
     int child_order)
@@ -264,10 +266,8 @@ __global__ void extendAddKernel(
     if (row < col) {
         return;
     }
-    const int parent_row = binaryFind(
-        sorted_parent_ids, sorted_parent_positions, parent_order, child_ids[row]);
-    const int parent_col = binaryFind(
-        sorted_parent_ids, sorted_parent_positions, parent_order, child_ids[col]);
+    const int parent_row = global_to_local[child_ids[row]];
+    const int parent_col = global_to_local[child_ids[col]];
     if (parent_row < 0 || parent_col < 0) {
         return;
     }
@@ -275,6 +275,22 @@ __global__ void extendAddKernel(
     atomicAdd(parent + parent_row + parent_col * parent_ld, value);
     if (parent_row != parent_col) {
         atomicAdd(parent + parent_col + parent_row * parent_ld, value);
+    }
+}
+
+__global__ void packFrontIdsKernel(
+    const DeviceFrontIdCopy* copies,
+    int copy_count,
+    int* packed_ids)
+{
+    const int copy_index = static_cast<int>(blockIdx.x);
+    if (copy_index >= copy_count) {
+        return;
+    }
+    const DeviceFrontIdCopy copy = copies[copy_index];
+    for (int i = threadIdx.x; i < copy.count; i += blockDim.x) {
+        packed_ids[copy.destination_offset + static_cast<std::size_t>(i)] =
+            copy.source[i];
     }
 }
 
@@ -423,7 +439,8 @@ __global__ void factorSmallMediumKernel(DeviceFrontDescriptor* descriptors)
                 const float diagonal = absf(matrix[step + step * order]);
                 float lambda = 0.0f;
                 int p = step;
-                // 非 fully-summed 行不能作为主元，但必须参与列稳定性检查。
+                // Non-fully-summed rows cannot pivot here, but still set the
+                // column scale used by the Bunch-Kaufman stability test.
                 for (int row = step + 1; row < order; ++row) {
                     const float candidate = absf(matrix[row + step * order]);
                     if (candidate > lambda) {
@@ -1114,7 +1131,7 @@ public:
     {
         validateOptions();
         checkCublas(cublasCreate(&cublas_), "cublasCreate");
-        // FP32 输入、输出和累加；禁止 SGEMM 自动降为 TF32 mantissa。
+        // Keep FP32 input, output, and accumulation; do not reduce SGEMM to TF32.
         checkCublas(cublasSetMathMode(cublas_, CUBLAS_PEDANTIC_MATH),
                     "cublasSetMathMode");
     }
@@ -1145,6 +1162,11 @@ public:
             checkCuda(cudaEventRecord(start), "cudaEventRecord(start)");
 
             prepareTree(symbolic);
+            global_to_local_.allocate(static_cast<std::size_t>(n_));
+            checkCuda(cudaMemsetAsync(
+                          global_to_local_.get(), 0xff,
+                          static_cast<std::size_t>(n_) * sizeof(int), 0),
+                      "initialize global-to-front position map");
             const HostClock::time_point preprocessing_begin = HostClock::now();
             prepareBaseEntries(n, col_ptr, row_indices, values, symbolic);
             statistics_.input_preprocessing_milliseconds = elapsedMilliseconds(
@@ -1302,8 +1324,6 @@ private:
         DeviceBuffer<float> values;
         DeviceBuffer<int> ids;
         DeviceBuffer<int> pivot_size;
-        DeviceBuffer<int> sorted_ids;
-        DeviceBuffer<int> sorted_positions;
     };
 
     void validateOptions() const
@@ -1370,6 +1390,7 @@ private:
         base_rows_.reset();
         base_cols_.reset();
         base_values_.reset();
+        global_to_local_.reset();
         statistics_ = GpuLdltStatistics();
         n_ = 0;
         complete_ = false;
@@ -1625,41 +1646,22 @@ private:
             static_cast<std::size_t>(front.order) * static_cast<std::size_t>(front.order));
         front.ids.allocate(front.ids_host.size());
         front.pivot_size.allocate(static_cast<std::size_t>(front.candidate_count));
-        checkCuda(cudaMemset(
+        checkCuda(cudaMemsetAsync(
                       front.values.get(), 0,
-                      static_cast<std::size_t>(front.order) * front.order * sizeof(float)),
+                      static_cast<std::size_t>(front.order) * front.order * sizeof(float), 0),
                   "clear frontal matrix");
-        checkCuda(cudaMemset(
+        checkCuda(cudaMemsetAsync(
                       front.pivot_size.get(), 0,
-                      static_cast<std::size_t>(front.candidate_count) * sizeof(int)),
+                      static_cast<std::size_t>(front.candidate_count) * sizeof(int), 0),
                   "clear pivot block sizes");
-        checkCuda(cudaMemcpy(
+        checkCuda(cudaMemcpyAsync(
                       front.ids.get(), front.ids_host.data(),
-                      front.ids_host.size() * sizeof(int), cudaMemcpyHostToDevice),
+                      front.ids_host.size() * sizeof(int), cudaMemcpyHostToDevice, 0),
                   "upload front IDs");
 
-        std::vector<std::pair<int, int> > sorted;
-        sorted.reserve(front.ids_host.size());
-        for (int position = 0; position < front.order; ++position) {
-            sorted.push_back(std::make_pair(front.ids_host[position], position));
-        }
-        std::sort(sorted.begin(), sorted.end());
-        std::vector<int> sorted_ids(sorted.size());
-        std::vector<int> sorted_positions(sorted.size());
-        for (std::size_t i = 0; i < sorted.size(); ++i) {
-            sorted_ids[i] = sorted[i].first;
-            sorted_positions[i] = sorted[i].second;
-        }
-        front.sorted_ids.allocate(sorted_ids.size());
-        front.sorted_positions.allocate(sorted_positions.size());
-        checkCuda(cudaMemcpy(
-                      front.sorted_ids.get(), sorted_ids.data(),
-                      sorted_ids.size() * sizeof(int), cudaMemcpyHostToDevice),
-                  "upload sorted front IDs");
-        checkCuda(cudaMemcpy(
-                      front.sorted_positions.get(), sorted_positions.data(),
-                      sorted_positions.size() * sizeof(int), cudaMemcpyHostToDevice),
-                  "upload sorted front positions");
+        const int position_blocks = (front.order + 255) / 256;
+        setFrontPositionsKernel<<<position_blocks, 256>>>(
+            front.ids.get(), front.order, global_to_local_.get());
 
         const int base_begin = base_owner_ptr_[node];
         const int base_end = base_owner_ptr_[node + 1];
@@ -1667,7 +1669,7 @@ private:
             const int blocks = (base_end - base_begin + 255) / 256;
             scatterBaseEntriesKernel<<<blocks, 256>>>(
                 front.values.get(), front.order,
-                front.sorted_ids.get(), front.sorted_positions.get(), front.order,
+                global_to_local_.get(),
                 base_rows_.get(), base_cols_.get(), base_values_.get(),
                 base_begin, base_end);
         }
@@ -1681,10 +1683,12 @@ private:
             const int total = child.contribution_order * child.contribution_order;
             extendAddKernel<<<(total + 255) / 256, 256>>>(
                 front.values.get(), front.order,
-                front.sorted_ids.get(), front.sorted_positions.get(), front.order,
+                global_to_local_.get(),
                 child.contribution_values.get(), child.contribution_ids.get(),
                 child.contribution_order);
         }
+        clearFrontPositionsKernel<<<position_blocks, 256>>>(
+            front.ids.get(), front.order, global_to_local_.get());
         checkCuda(cudaGetLastError(), "assemble frontal matrix on GPU");
         return front;
     }
@@ -1844,32 +1848,26 @@ private:
         node.accepted = front.accepted;
         node.delayed = front.delayed;
 
-        front.ids_host.resize(static_cast<std::size_t>(front.order));
-        checkCuda(cudaMemcpy(
-                      front.ids_host.data(), front.ids.get(),
-                      front.ids_host.size() * sizeof(int), cudaMemcpyDeviceToHost),
-                  "download permuted front IDs");
-
         if (front.accepted != 0) {
             node.factor_values.allocate(
                 static_cast<std::size_t>(front.order) * front.accepted);
             node.factor_ids.allocate(static_cast<std::size_t>(front.order));
             node.pivot_size.allocate(static_cast<std::size_t>(front.accepted));
-            checkCuda(cudaMemcpy(
+            checkCuda(cudaMemcpyAsync(
                           node.factor_values.get(), front.values.get(),
                           static_cast<std::size_t>(front.order) * front.accepted *
                               sizeof(float),
-                          cudaMemcpyDeviceToDevice),
+                          cudaMemcpyDeviceToDevice, 0),
                       "save GPU supernode factor");
-            checkCuda(cudaMemcpy(
+            checkCuda(cudaMemcpyAsync(
                           node.factor_ids.get(), front.ids.get(),
                           static_cast<std::size_t>(front.order) * sizeof(int),
-                          cudaMemcpyDeviceToDevice),
+                          cudaMemcpyDeviceToDevice, 0),
                       "save factor IDs");
-            checkCuda(cudaMemcpy(
+            checkCuda(cudaMemcpyAsync(
                           node.pivot_size.get(), front.pivot_size.get(),
                           static_cast<std::size_t>(front.accepted) * sizeof(int),
-                          cudaMemcpyDeviceToDevice),
+                          cudaMemcpyDeviceToDevice, 0),
                       "save pivot block sizes");
         }
 
@@ -1886,11 +1884,11 @@ private:
             extractContributionKernel<<<(total + 255) / 256, 256>>>(
                 front.values.get(), front.order, front.accepted,
                 node.contribution_values.get(), node.contribution_order);
-            checkCuda(cudaMemcpy(
+            checkCuda(cudaMemcpyAsync(
                           node.contribution_ids.get(),
                           front.ids.get() + front.accepted,
                           static_cast<std::size_t>(node.contribution_order) * sizeof(int),
-                          cudaMemcpyDeviceToDevice),
+                          cudaMemcpyDeviceToDevice, 0),
                       "save contribution IDs");
         }
         checkCuda(cudaGetLastError(), "extract child contribution");
@@ -1905,6 +1903,47 @@ private:
                 static_cast<std::size_t>(front.delayed);
         }
         factorization_order_.push_back(front.node);
+    }
+
+    void downloadFrontIds(std::vector<FrontWork>& fronts)
+    {
+        if (fronts.empty()) {
+            return;
+        }
+
+        std::vector<DeviceFrontIdCopy> host_copies(fronts.size());
+        std::size_t total_ids = 0;
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            host_copies[i].source = fronts[i].ids.get();
+            host_copies[i].destination_offset = total_ids;
+            host_copies[i].count = fronts[i].order;
+            total_ids += static_cast<std::size_t>(fronts[i].order);
+        }
+
+        DeviceBuffer<DeviceFrontIdCopy> device_copies(host_copies.size());
+        DeviceBuffer<int> packed_device_ids(total_ids);
+        std::vector<int> packed_host_ids(total_ids);
+        checkCuda(cudaMemcpyAsync(
+                      device_copies.get(), host_copies.data(),
+                      host_copies.size() * sizeof(DeviceFrontIdCopy),
+                      cudaMemcpyHostToDevice, 0),
+                  "upload batched front-ID copy descriptors");
+        packFrontIdsKernel<<<static_cast<unsigned int>(fronts.size()), 256>>>(
+            device_copies.get(), static_cast<int>(fronts.size()),
+            packed_device_ids.get());
+        checkCuda(cudaGetLastError(), "pack permuted front IDs");
+        checkCuda(cudaMemcpy(
+                      packed_host_ids.data(), packed_device_ids.get(),
+                      total_ids * sizeof(int), cudaMemcpyDeviceToHost),
+                  "download batched permuted front IDs");
+
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            const std::size_t begin = host_copies[i].destination_offset;
+            fronts[i].ids_host.assign(
+                packed_host_ids.begin() + begin,
+                packed_host_ids.begin() + begin +
+                    static_cast<std::size_t>(host_copies[i].count));
+        }
     }
 
     void releaseConsumedChildContributions(const std::vector<int>& wave)
@@ -1994,6 +2033,7 @@ private:
                     elapsedMilliseconds(large_begin, HostClock::now());
 
                 const HostClock::time_point finalization_begin = HostClock::now();
+                downloadFrontIds(fronts);
                 for (std::size_t i = 0; i < fronts.size(); ++i) {
                     finalizeFront(fronts[i]);
                     ++processed;
@@ -2040,6 +2080,7 @@ private:
     DeviceBuffer<int> base_rows_;
     DeviceBuffer<int> base_cols_;
     DeviceBuffer<float> base_values_;
+    DeviceBuffer<int> global_to_local_;
 };
 
 GpuSupernodalLdltFactor::GpuSupernodalLdltFactor(const GpuLdltOptions& options)

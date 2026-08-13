@@ -1,0 +1,163 @@
+\documentclass[UTF8,zihao=-4,oneside,openany,fontset=fandol]{ctexbook}
+
+\usepackage[a4paper,top=2.35cm,bottom=2.35cm,left=2.55cm,right=2.35cm,headheight=15pt]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,longtable,tabularx,array,multirow,makecell}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,matrix,decorations.pathreplacing,shapes.geometric}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage[nameinlink,noabbrev]{cleveref}
+
+\definecolor{MumpsBlue}{HTML}{17365D}
+\definecolor{MumpsCyan}{HTML}{2F75B5}
+\definecolor{MumpsRed}{HTML}{C00000}
+\definecolor{MumpsGray}{HTML}{F2F5F8}
+\definecolor{MumpsGreen}{HTML}{548235}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=MumpsBlue,
+  citecolor=MumpsGreen,
+  urlcolor=MumpsCyan,
+  pdftitle={MUMPS研究文档},
+  pdfauthor={MUMPS研究文档}
+}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.42em plus 0.12em minus 0.08em}
+\linespread{1.12}
+\setlist{nosep,leftmargin=2em,topsep=0.25em}
+\setlist[enumerate]{label=\arabic*.,ref=\arabic*}
+\setcounter{tocdepth}{1}
+\setcounter{secnumdepth}{3}
+\allowdisplaybreaks[2]
+\raggedbottom
+\let\cleardoublepage\clearpage
+
+\titleformat{\chapter}[display]
+  {\bfseries\color{MumpsBlue}}
+  {\fontsize{15}{18}\selectfont 第\thechapter 章}
+  {0.35em}
+  {\fontsize{23}{29}\selectfont}
+\titlespacing*{\chapter}{0pt}{-1.0em}{1.15em}
+\titleformat{\section}{\Large\bfseries\color{MumpsBlue}}{\thesection}{0.65em}{}
+\titleformat{\subsection}{\large\bfseries\color{MumpsCyan}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.55em}{}
+\titlespacing*{\section}{0pt}{1.25em}{0.55em}
+\titlespacing*{\subsection}{0pt}{1.0em}{0.4em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small MUMPS 研究文档}
+\fancyhead[R]{\small\nouppercase{\leftmark}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.45pt}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
+
+\captionsetup{font=small,labelfont=bf,labelsep=quad}
+
+\lstdefinestyle{compactcode}{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{MumpsBlue}\bfseries,
+  commentstyle=\color{MumpsGreen},
+  stringstyle=\color{MumpsRed},
+  backgroundcolor=\color{MumpsGray},
+  frame=single,
+  rulecolor=\color{gray!45},
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  xleftmargin=0.7em,
+  xrightmargin=0.7em,
+  aboveskip=0.65em,
+  belowskip=0.65em
+}
+\lstset{style=compactcode}
+
+\newcommand{\MUMPS}{\textsc{Mumps}}
+\newcommand{\FS}{\mathrm{FS}}
+\newcommand{\CB}{\mathrm{CB}}
+\newcommand{\fl}{\operatorname{fl}}
+\newcommand{\rank}{\operatorname{rank}}
+\newcommand{\nnz}{\operatorname{nnz}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\src}[1]{\texttt{#1}}
+\newcommand{\important}[1]{\textcolor{MumpsRed}{\textbf{#1}}}
+
+\newenvironment{keypoint}
+  {\begin{center}\begin{minipage}{0.92\textwidth}\color{MumpsBlue}\hrule\vspace{0.55em}\bfseries}
+  {\par\vspace{0.55em}\hrule\end{minipage}\end{center}}
+
+\begin{document}
+
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+  \centering
+  \vspace*{8.5cm}
+
+  {\bfseries\fontsize{45}{45}\selectfont
+   MUMPS 研究文档}
+\end{titlepage}
+\hypersetup{pageanchor=true}
+
+\frontmatter
+\tableofcontents
+\clearpage
+
+\mainmatter
+\include{01_快速编译与测试}
+\include{02_稀疏直接法数学基础——多波前与超节点}
+\include{03_MUMPS延迟主元专题}
+\include{04_MUMPS并行策略与内存管理}
+
+\appendix
+\include{A_延迟主元推广算法}
+\include{B_KJI-SAXPY块分解}
+\include{C_鞍点矩阵与超节点延迟主元示例}
+
+\backmatter
+\renewcommand{\bibname}{参考资料}
+\addcontentsline{toc}{chapter}{参考资料}
+\begin{thebibliography}{99}
+\bibitem{mumpsguide}
+MUMPS Consortium. \emph{MUltifrontal Massively Parallel Solver (MUMPS 5.6.2): Users' Guide}, 2023.
+
+\bibitem{mumpssource}
+MUMPS Consortium. \emph{MUMPS 5.6.2 Source Distribution}, 2023.
+
+\bibitem{duffreid1983}
+I. S. Duff and J. K. Reid. The multifrontal solution of indefinite sparse symmetric linear equations. \emph{ACM Transactions on Mathematical Software}, 9(3):302--325, 1983.
+
+\bibitem{amestoy2001}
+P. R. Amestoy, I. S. Duff, J.-Y. L'Excellent, and J. Koster. A fully asynchronous multifrontal solver using distributed dynamic scheduling. \emph{SIAM Journal on Matrix Analysis and Applications}, 23(1):15--41, 2001.
+
+\bibitem{amestoy2006}
+P. R. Amestoy, A. Guermouche, J.-Y. L'Excellent, and S. Pralet. Hybrid scheduling for the parallel solution of linear systems. \emph{Parallel Computing}, 32(2):136--156, 2006.
+
+\bibitem{liu1992}
+J. W. H. Liu. The multifrontal method for sparse matrix solution: theory and practice. \emph{SIAM Review}, 34(1):82--109, 1992.
+
+\bibitem{demmel1999}
+J. W. Demmel, S. C. Eisenstat, J. R. Gilbert, X. S. Li, and J. W. H. Liu. A supernodal approach to sparse partial pivoting. \emph{SIAM Journal on Matrix Analysis and Applications}, 20(3):720--755, 1999.
+
+\bibitem{davis2006}
+T. A. Davis. \emph{Direct Methods for Sparse Linear Systems}. SIAM, 2006.
+
+\bibitem{bunchkaufman1977}
+J. R. Bunch and L. Kaufman. Some stable methods for calculating inertia and solving symmetric linear systems. \emph{Mathematics of Computation}, 31(137):163--179, 1977.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,281 @@
+\chapter{KJI--SAXPY 算法与块分解}
+
+\section{KJI 循环次序}
+
+设 $A\in\mathbb{R}^{n\times n}$ 进行原位 LU 分解，暂不写置换。第 $k$ 步先计算乘子
+
+\[
+l_{ik}=\frac{a_{ik}}{a_{kk}},
+\qquad i=k+1,\ldots,n,
+\]
+
+再更新尾矩阵
+
+\[
+a_{ij}\leftarrow a_{ij}-l_{ik}a_{kj},
+\qquad i,j=k+1,\ldots,n.
+\]
+
+KJI 次序把 $k$ 放在最外层、$j$ 放在中层、$i$ 放在最内层：
+
+\begin{lstlisting}
+for k = 1:n-1
+    A(k+1:n,k) = A(k+1:n,k) / A(k,k)
+    for j = k+1:n
+        A(k+1:n,j) = A(k+1:n,j)
+                     - A(k,j) * A(k+1:n,k)
+    end
+end
+\end{lstlisting}
+
+固定 $k,j$ 后，内层更新为
+
+\[
+A(k+1:n,j)\leftarrow
+A(k+1:n,j)-A(k,j)A(k+1:n,k),
+\]
+
+即向量形式
+
+\[
+y\leftarrow y+\alpha x,
+\]
+
+对应 BLAS-1 的 SAXPY；双精度实数对应 DAXPY。列主序存储下，内层 $i$ 遍历同一列的连续元素。
+
+对每个 $k$，全部后续列的更新还可以写成秩一形式
+
+\[
+A_{k+1:n,k+1:n}\leftarrow
+A_{k+1:n,k+1:n}
+-A_{k+1:n,k}A_{k,k+1:n}.
+\]
+
+该形式对应 BLAS-2 的 GER。SAXPY 和 GER 表示的是同一消元更新的两种接口组织。将多个秩一更新合并为块更新，是稠密分块 LU 和超节点稀疏分解使用 BLAS-3 的基础\cite{davis2006,demmel1999}。
+
+\section{多个秩一更新的合并}
+
+若连续处理 $b$ 个主元 $k=s,\ldots,s+b-1$，这些主元对后续子矩阵的总更新为
+
+\[
+\sum_{q=s}^{s+b-1}l_qu_q^T.
+\]
+
+把列向量 $l_q$ 和行向量 $u_q^T$ 分别组合成
+
+\[
+L_P=
+\begin{bmatrix}l_s&l_{s+1}&\cdots&l_{s+b-1}\end{bmatrix},
+\]
+
+\[
+U_P=
+\begin{bmatrix}
+u_s^T\\u_{s+1}^T\\\vdots\\u_{s+b-1}^T
+\end{bmatrix},
+\]
+
+则
+
+\[
+\sum_{q=s}^{s+b-1}l_qu_q^T=L_PU_P.
+\]
+
+因此 $b$ 次秩一更新可以合并成一次矩阵乘法：
+
+\[
+A_{\mathrm{trail}}\leftarrow
+A_{\mathrm{trail}}-L_PU_P.
+\]
+
+块分解并不改变 LU 的代数结果；它把重复的向量更新重排为矩阵--矩阵运算。
+
+\section{方形分块 LU}
+
+把当前活动矩阵按宽度 $b$ 分块：
+
+\[
+A=
+\begin{bmatrix}
+A_{11}&A_{12}\\
+A_{21}&A_{22}
+\end{bmatrix},
+\qquad A_{11}\in\mathbb{R}^{b\times b}.
+\]
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[font=\small]
+  \draw[thick] (0,0) rectangle (5.2,5.2);
+  \draw[thick] (2.05,0)--(2.05,5.2);
+  \draw[thick] (0,3.15)--(5.2,3.15);
+  \fill[MumpsBlue!16] (0,3.15) rectangle (2.05,5.2);
+  \fill[MumpsCyan!12] (2.05,3.15) rectangle (5.2,5.2);
+  \fill[MumpsCyan!12] (0,0) rectangle (2.05,3.15);
+  \fill[gray!12] (2.05,0) rectangle (5.2,3.15);
+  \node at (1.025,4.175) {$A_{11}$};
+  \node at (3.625,4.175) {$A_{12}$};
+  \node at (1.025,1.575) {$A_{21}$};
+  \node at (3.625,1.575) {$A_{22}$};
+  \draw[MumpsRed,very thick] (0,0)--(0,5.2)--(2.05,5.2)--(2.05,0)--cycle;
+  \node[MumpsRed] at (1.025,-0.38) {宽度 $b$ 的面板};
+\end{tikzpicture}
+\caption{块 LU 的方形活动矩阵和面板。}
+\label{fig:kji-block-square}
+\end{figure}
+
+块 LU 恒等式为
+
+\[
+\begin{bmatrix}
+A_{11}&A_{12}\\A_{21}&A_{22}
+\end{bmatrix}
+=
+\begin{bmatrix}
+L_{11}&0\\L_{21}&I
+\end{bmatrix}
+\begin{bmatrix}
+U_{11}&U_{12}\\0&S_{22}
+\end{bmatrix}.
+\]
+
+比较分块乘积得到：
+
+\begin{align}
+A_{11}&=L_{11}U_{11},\\
+U_{12}&=L_{11}^{-1}A_{12},\\
+L_{21}&=A_{21}U_{11}^{-1},\\
+S_{22}&=A_{22}-L_{21}U_{12}.
+\end{align}
+
+对应一次面板迭代的计算顺序为：
+
+\begin{enumerate}
+  \item 在面板中分解主元块 $A_{11}$；
+  \item 用左三角求解计算 $U_{12}$；
+  \item 用右三角求解计算 $L_{21}$；
+  \item 用矩阵乘法更新 $A_{22}$。
+\end{enumerate}
+
+第 2、3 步对应 TRSM，第 4 步对应 GEMM。标量 KJI 中连续的 DAXPY/GER 更新由最后一步的 GEMM 集中完成。
+
+\section{主元交换与面板更新}
+
+采用部分选主元时，第 $k$ 列的主元位置为
+
+\[
+p_k=\argmax_{i\ge k}|a_{ik}|.
+\]
+
+搜索范围是当前列的全部活动行，不限于 $b\times b$ 的对角方块。因此，算法中的“面板”是高为活动行数、宽为 $b$ 的长方形列块；\cref{fig:kji-block-square} 中红色区域表示这一列块。
+
+行交换必须同步作用于当前活动矩阵和已经形成的 $L$ 行，并记录到行置换中。若算法还允许列交换，则活动矩阵的列、全局列编号和列置换必须同步更新，分解关系写成
+
+\[
+PAQ=LU.
+\]
+
+面板内部不能直接使用尚未包含前面板列贡献的旧数据。设当前面板起点为 $s$，已经接受 $t$ 个主元，准备处理 $k=s+t$ 时，当前列先物化为
+
+\[
+A(k:n,k)\leftarrow
+A(k:n,k)-L(k:n,s:k-1)U(s:k-1,k).
+\]
+
+面板结束后，再把全部已接受列对面板外尾矩阵的贡献一次写回。
+
+\section{延迟主元下的分块 LU}
+
+非对称延迟 LU 算子采用 64 列面板。面板内每一步仍先检查当前列；只有当前列全零时，才按算子规定的活动子块或活动列搜索规则继续选取主元。
+
+若搜索发生在面板尚未完成时，必须先落实该面板已经接受的主元对搜索区域的更新。设面板已经接受 $t\le b$ 列，则写回
+
+\[
+A_{\mathrm{trail}}\leftarrow
+A_{\mathrm{trail}}-L_P(:,1:t)U_P(1:t,:).
+\]
+
+写回后，被检查的活动区是当前 Schur 补。若仍不存在可用主元，则以当前位置为 \code{info}，剩余区间作为延迟后缀。
+
+因此，固定面板宽度 $b$ 是一次最多收集的主元数；遇到延迟时，实际面板宽度可以小于 $b$。
+
+\section{对称块更新}
+
+对称不定分解中，一个面板收集 $1\times1$ 和 $2\times2$ 主元块。设面板乘子为 $L_P$，块对角主元为 $D_P$，尾矩阵更新为
+
+\[
+A_{22}\leftarrow A_{22}-L_PD_PL_P^T.
+\]
+
+定义
+
+\[
+W_P=L_PD_P,
+\]
+
+则
+
+\[
+A_{22}\leftarrow A_{22}-L_PW_P^T.
+\]
+
+分块 Bunch--Kaufman 算子用
+
+\[
+S=A_{\mathrm{stored}}-L_PW_P^T
+\]
+
+表示面板中尚未写回的 Schur 补。主元测试需要某一列或某一行时，以矩阵--向量乘法计算相应部分；面板完成后，以对称秩二 $k$ 更新写回下三角尾矩阵。面板边界不允许把一个 $2\times2$ 主元拆成两部分。
+
+\section{块三角求解}
+
+块化同样用于因子求解。把下三角系统分块：
+
+\[
+\begin{bmatrix}
+L_{11}&0\\L_{21}&L_{22}
+\end{bmatrix}
+\begin{bmatrix}Y_1\\Y_2\end{bmatrix}
+=
+\begin{bmatrix}B_1\\B_2\end{bmatrix}.
+\]
+
+前代为
+
+\[
+L_{11}Y_1=B_1,
+\]
+
+\[
+B_2' = B_2-L_{21}Y_1,
+\]
+
+\[
+L_{22}Y_2=B_2'.
+\]
+
+上三角回代同理。单个右端项时，中间更新是矩阵--向量乘法；多个右端项组成矩阵 $B$ 时，更新
+
+\[
+B_2' = B_2-L_{21}Y_1
+\]
+
+成为矩阵--矩阵乘法。因而，块因子格式既用于分解阶段合并 SAXPY 更新，也用于求解阶段合并多个右端项的三角更新。
+
+\section{运算量与数据访问}
+
+无论采用标量 KJI 还是块 LU，稠密 $n\times n$ LU 的主导浮点运算量均约为
+
+\[
+\frac{2}{3}n^3.
+\]
+
+二者的区别是运算组织。标量形式反复读取乘子列和后续列并执行向量更新；块形式把 $b$ 个主元的更新合并，使 $L_P$ 和 $U_P$ 的元素在一次矩阵乘法中重复使用。面板内部仍保留主元搜索、交换和细粒度更新，面板外的主要 Schur 补更新则由 TRSM 和 GEMM 完成。
+
+这一变换可以概括为
+
+\[
+\underbrace{\sum_{q=s}^{s+b-1}l_qu_q^T}_{b\text{ 次秩一更新}}
+\quad\longrightarrow\quad
+\underbrace{L_PU_P}_{\text{一次块更新}}.
+\]

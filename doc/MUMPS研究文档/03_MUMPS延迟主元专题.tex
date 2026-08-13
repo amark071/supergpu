@@ -1,0 +1,284 @@
+\chapter{MUMPS 延迟主元}
+
+本章只讨论 MUMPS 5.6.2 自身采用的数值选主元与延迟主元机制，所有阈值、判据和运行时计数均以 MUMPS 用户手册及数值分解源码为准。
+
+\section{MUMPS 为什么需要延迟主元}
+
+MUMPS 的分析阶段根据矩阵的非零结构建立消元树，并预测每个节点应当消去的变量、波前矩阵规模、因子存储量和计算量。这些预测只包含结构信息，不能保证符号阶段选定的每一个变量在数值分解时都是稳定主元。
+
+设当前节点已经装配出波前矩阵
+\[
+F=
+\begin{bmatrix}
+F_{11} & F_{12}\\
+F_{21} & F_{22}
+\end{bmatrix}.
+\]
+其中 $F_{11}$ 对应 Fully Summed 变量。这些变量已经收齐所有子节点贡献，因而只有它们能够在当前节点中作为候选主元。$F_{22}$ 所对应的变量尚未完全装配，只能参加更新，不能提前作为当前节点的主元。
+
+如果候选主元相对于所在行或列的其他元素过小，直接消去会产生很大的乘子，放大舍入误差。MUMPS 因而在 Fully Summed 候选区内实施阈值选主元：
+
+\begin{enumerate}
+  \item 搜索满足稳定性阈值的 $1\times1$ 主元；
+  \item 对称不定问题还可以搜索满足阈值的 $2\times2$ 主元块；
+  \item 只有通过数值检验的候选量才在当前节点消去；
+  \item 当候选区中不再存在合格主元时，尚未消去的 Fully Summed 变量随贡献块传到父节点。
+\end{enumerate}
+
+这些未在原节点消去、而是在父节点重新参加选主元的变量，就是延迟主元。延迟并不表示丢弃变量，也不表示立即把小主元改成零；它只是推迟该变量的消去位置。
+
+\section{MUMPS 的相对阈值 \code{CNTL(1)}}
+
+\subsection{部分阈值选主元}
+
+MUMPS 用 \code{CNTL(1)} 设置数值选主元的相对阈值。记
+\[
+u=\code{CNTL(1)},\qquad 0\le u\le1.
+\]
+以非对称矩阵的列搜索形式为例，在高斯消去第 $i$ 步，令
+\[
+m_i=\max_{k=i,\ldots,n}|a_{ki}|.
+\]
+只有当候选对角主元满足
+\begin{equation}
+\boxed{|a_{ii}|\ge u,m_i}
+\label{eq:mumps-ptp}
+\end{equation}
+时，MUMPS 才允许直接接受该主元。MUMPS 也可以按行实施等价的阈值搜索；在多波前实现中，搜索范围被限制在当前波前已经完整装配的候选区域内\cite{mumpsguide}。
+
+式~\eqref{eq:mumps-ptp} 比较的是候选主元与其当前行或列最大元素，而不是与整个活动子矩阵的最大元素比较。该判据允许消去乘子的模受到 $1/u$ 的控制，对应消去步的增长因子上界为 $1+1/u$\cite{mumpsguide}。
+
+\subsection{参数取值及其含义}
+
+MUMPS 5.6.2 对 \code{CNTL(1)} 的规定如下：
+
+\begin{center}
+\begin{tabularx}{0.92\textwidth}{>{\ttfamily}l X}
+\toprule
+CNTL(1) & 数值含义 \\
+\midrule
+$<0$ & 按 $0$ 处理。\\
+$=0$ & 不进行数值选主元；遇到零主元时分解失败，除非另有静态主元或零主元处理机制介入。\\
+$>0$ & 启用阈值数值选主元。\\
+$>1$，非对称 & 按 $1$ 处理。\\
+$>0.5$，对称 & 按 $0.5$ 处理。\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+默认值为
+\[
+u=
+\begin{cases}
+0.01, & \text{非对称矩阵或一般对称矩阵},\\
+0,    & \text{对称正定矩阵}.
+\end{cases}
+\]
+对于对角占优并且不需要数值选主元的矩阵，可以令 $u=0$ 以减少分解时间。对于一般不定问题，增大 $u$ 会提高接受主元的要求，通常有利于数值稳定性，但也会增加换主元、延迟主元、填充以及额外计算。常见的阈值选择为 $0.01$ 或 $0.1$\cite{mumpsguide}。
+
+\begin{keypoint}
+在 MUMPS 中，控制延迟主元发生概率的主要相对阈值是 \code{CNTL(1)}。$u$ 越大，判据越严格，候选变量越可能被推迟；$u$ 越小，越倾向于维持分析阶段预测的消去顺序。
+\end{keypoint}
+
+\section{非对称 LU 分解的主元判定}
+
+\subsection{在 Fully Summed 区内搜索}
+
+非对称情形计算带行、列置换的 LU 分解。设当前波前中可尝试消去的 Fully Summed 变量数为 \code{NASS}，已经成功消去的主元数为 \code{NPIV}，则下一个主元位置为
+\[
+i=\code{NPIV}+1.
+\]
+MUMPS 不会只检查位置 $i$ 的对角元。它在剩余 Fully Summed 候选中轮流检查可用的主元行或列，并允许把合格候选交换到第 $i$ 个位置。更新变量虽然不能被选作主元，但其中的元素仍参与行或列最大值的计算，因为它们决定消去乘子的大小。
+
+对某个候选主元 $p$，记 $r_{\max}$ 为该候选相关行或列在当前有效范围内的最大元素模。MUMPS 源码中的核心相对检验是
+\begin{equation}
+|p|\ge u,r_{\max}.
+\label{eq:mumps-lu-relative}
+\end{equation}
+此外还必须通过绝对小量保护：
+\begin{equation}
+|p|>max\{s_{\mathrm{abs}},\operatorname{tiny}(r_{\max})\}.
+\label{eq:mumps-lu-absolute}
+\end{equation}
+这里 $s_{\mathrm{abs}}$ 是当前运行模式下的绝对小主元界；\code{tiny} 是浮点数可表示范围的保护量。式~\eqref{eq:mumps-lu-relative} 是由 \code{CNTL(1)} 控制的主要稳定性判据，式~\eqref{eq:mumps-lu-absolute} 用于防止零主元、极小主元和下溢。
+
+MUMPS 对候选的处理可概括为：
+
+\begin{enumerate}
+  \item 若当前位置的候选满足相对阈值和绝对阈值，直接接受；
+  \item 否则在剩余 Fully Summed 候选中寻找满足相同条件的行内或列内最大元素；
+  \item 找到后执行相应置换，把它移到当前主元位置；
+  \item 接受主元、更新因子与剩余子矩阵，并令 \code{NPIV} 加一；
+  \item 若遍历候选区后仍没有合格主元，则停止当前波前的继续消去。
+\end{enumerate}
+
+因此，“某个预定对角元不满足式~\eqref{eq:mumps-lu-relative}”并不等于立刻延迟。只有当当前 Fully Summed 区中找不到任何可接受的替代主元时，尚未消去的变量才整体留到贡献块中。
+
+\section{对称不定 $LDL^{T}$ 分解的主元判定}
+
+\subsection{$1\times1$ 主元}
+
+为了保持对称性，MUMPS 对行和列实施相同置换，并计算
+\[
+P^{T}AP=LDL^{T},
+\]
+其中 $D$ 可以含有 $1\times1$ 和 $2\times2$ 对角块。
+
+对于 $1\times1$ 候选 $p$，源码分别统计候选在当前 Fully Summed 区和相关更新区中的最大元素尺度，记为 $a_{\max}$ 与 $r_{\max}$。接受条件为
+\begin{equation}
+\boxed{
+|p|\ge u\max\{a_{\max},r_{\max}\}
+}
+\label{eq:mumps-ldlt-1x1-rel}
+\end{equation}
+并同时要求
+\begin{equation}
+|p|>max\{s_{\mathrm{abs}},\operatorname{tiny}(r_{\max})\}.
+\label{eq:mumps-ldlt-1x1-abs}
+\end{equation}
+如果当前候选不满足 $1\times1$ 判据，MUMPS 会寻找与它耦合较强的另一个 Fully Summed 变量，尝试构造 $2\times2$ 主元块。该主元块继续由相对阈值 $u=\code{CNTL(1)}$ 控制，并通过对逆主元块所产生消去乘子的估计进行检验。
+
+\subsection{$2\times2$ 主元块}
+
+设候选主元块为
+\[
+D_p=
+\begin{bmatrix}
+a & b\\
+b & c
+\end{bmatrix},qquad
+\Delta=ac-b^2.
+\]
+若 $\Delta=0$，主元块奇异，不能接受。因为
+\[
+D_p^{-1}
+=\frac{1}{\Delta}
+\begin{bmatrix}
+c & -b\\
+-b & a
+\end{bmatrix},
+\]
+MUMPS 直接根据 $D_p^{-1}$ 作用于其余行时可能产生的乘子大小建立检验。记 $r_{\max}$、$t_{\max}$ 分别为两个候选变量与剩余有效区域耦合元素的最大模，$a_{\max}$ 为搜索第二个候选时得到的耦合尺度。源码要求
+\begin{align}
+u\bigl(|c|r_{\max}+a_{\max}t_{\max}\bigr)
+  &\le |\Delta|,\label{eq:mumps-2x2-a}\\
+u\bigl(|a|t_{\max}+a_{\max}r_{\max}\bigr)
+  &\le |\Delta|.\label{eq:mumps-2x2-b}
+\end{align}
+当启用了非零的绝对小主元界时，还要求
+\begin{equation}
+\sqrt{|\Delta|}>s_{\mathrm{abs}}.
+\label{eq:mumps-2x2-abs}
+\end{equation}
+这些条件共同限制 $D_p^{-1}$ 产生的两个消去乘子。若全部满足，MUMPS 接受该 $2\times2$ 块，执行对称置换，并令 \code{NPIV} 增加 2；否则继续检查其他候选。所有允许的 $1\times1$ 和 $2\times2$ 候选都失败后，剩余变量才延迟。
+
+\section{延迟量怎样形成并传到父节点}
+
+\subsection{三个运行时计数}
+
+延迟主元在 MUMPS 中由三个运行时整数直接刻画：
+\[
+\begin{aligned}
+\code{NASS}&: &&\text{当前波前中允许尝试消去的 Fully Summed 变量数},\\
+\code{NPIV}&: &&\text{实际通过主元检验并已消去的变量数},\\
+\code{NELIM}&: &&\text{未在当前节点消去的变量数}.
+\end{aligned}
+\]
+节点分解结束后，MUMPS 计算
+\begin{equation}
+\boxed{
+\code{NELIM}=\code{NASS}-\code{NPIV}
+}.
+\label{eq:mumps-nelim}
+\end{equation}
+\code{NELIM} 不是分析阶段预先确定的常量，而是由实际数值和选主元结果决定的运行时量。
+
+若 \code{NPIV=NASS}，所有候选变量均在当前节点成功消去；若 \code{NPIV<NASS}，则贡献块的变量排列可抽象为
+\[
+\underbrace{\code{NASS}-\code{NPIV}}_{\text{延迟变量}}
+\quad+\quad
+\underbrace{\code{NFRONT}-\code{NASS}}_{\text{原有更新变量}}.
+\]
+因此贡献块不再只是符号分析预测的 Schur 补变量，还在其前部携带实际延迟变量及相应的全局行、列索引。
+
+\subsection{父节点重新装配}
+
+子节点完成后，贡献块留在本地栈中或通过 MPI 发送给父节点的 owner 进程。父节点读取子节点实际返回的 \code{NELIM}，把这些变量加入自己的 Fully Summed 候选集合。其可尝试消去的变量数因此包含
+\[
+\code{NASS}_{p}
+=\code{NASS}_{p}^{\mathrm{symbolic}}
++\sum_{c\in\operatorname{child}(p)}\code{NELIM}_{c}.
+\]
+父节点随后根据新的实际规模建立波前、执行 extend-add，并对这些变量重新进行阈值选主元。延迟变量在父节点处已经收到了更多子树贡献，数值环境发生变化，因而可能在新的候选集合中找到可接受主元。
+
+整个过程可以写成
+\begin{align*}
+\text{子节点找不到合格主元}
+&\longrightarrow \code{NPIV}<\code{NASS}
+\longrightarrow \code{NELIM}>0,\\
+&\longrightarrow \text{并入贡献块}
+\longrightarrow \text{父节点重新装配和选主元}.
+\end{align*}
+
+若这种延迟一直传播到消元树根，而根节点仍存在 \code{NASS}\,$\ne$\,\code{NPIV}，则已经没有更高层节点可以接收这些变量。在普通分解路径中，这将导致零主元或奇异性错误。需要处理秩亏矩阵时，应显式启用 MUMPS 的零主元行检测机制。
+
+\section{静态主元、延迟主元与零主元检测}
+
+\subsection{静态主元 \code{CNTL(4)}}
+
+MUMPS 可以用静态主元减少数值延迟带来的结构增长。静态主元阈值由实数参数 \code{CNTL(4)} 控制：
+
+\begin{center}
+\begin{tabularx}{0.92\textwidth}{>{\ttfamily}l X}
+\toprule
+CNTL(4) & 处理方式 \\
+\midrule
+$<0$ & 不启用静态主元；默认值为 $-1$。\\
+$=0$ & 启用自动阈值，当前版本取 $\sqrt{\epsilon}\,\|A_{\mathrm{pre}}\|$。\\
+$>0$ & 启用静态主元，模小于 \code{CNTL(4)} 的主元被替换为该阈值，并保留原符号。\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+其中 $A_{\mathrm{pre}}$ 是经过置换和缩放后的待分解矩阵，$\epsilon$ 是机器精度。MUMPS 在运行时把 \code{CNTL(1)} 控制的数值选主元与 \code{CNTL(4)} 控制的静态主元结合起来：本来会因部分阈值选主元而推迟的小主元，可以通过受控扰动留在预定消去位置，从而避免父节点波前继续膨胀。被修改的主元总数由 \code{INFOG(25)} 返回\cite{mumpsguide}。
+
+静态主元改变了原矩阵的数值，因此通常需要在求解后进行迭代改进。它与延迟主元的区别是：
+
+\begin{itemize}
+  \item 延迟主元不修改主元数值，而是改变变量实际消去的节点；
+  \item 静态主元尽量维持符号阶段的消去位置，但会扰动过小主元；
+  \item 前者增加动态填充和内存不确定性，后者把这部分代价转换为数值扰动及后处理代价。
+\end{itemize}
+
+需要特别注意：\code{CNTL(4)} 是静态主元阈值，而 \code{ICNTL(4)} 只是控制错误、警告和诊断信息的输出级别，两者没有相同的算法含义。
+
+\subsection{零主元行检测}
+
+\code{ICNTL(24)=1} 启用零主元行检测。其判定尺度由 \code{CNTL(3)} 给出。记阈值为 $t_{\mathrm{null}}$，则
+\[
+t_{\mathrm{null}}=
+\begin{cases}
+\code{CNTL(3)}\,\|A_{\mathrm{pre}}\|, & \code{CNTL(3)}>0,\\
+\epsilon\,\|A_{\mathrm{pre}}\|\sqrt{N_h}, & \code{CNTL(3)}=0,\\
+|\code{CNTL(3)}|, & \code{CNTL(3)}<0,
+\end{cases}
+\]
+其中 $N_h$ 是消元树最深分支上的变量数。当候选行或列的无穷范数小于该阈值时，MUMPS 将其识别为零主元行。该功能用于估计秩亏并支持奇异系统求解或零空间基的计算，它不是普通延迟主元判据。
+
+静态主元与零主元检测不兼容；当 \code{ICNTL(24)=1} 时，静态主元选项会被忽略。若根节点由 ScaLAPACK 分解，根上的零主元检测能力还会受到限制；需要精确检测时可令 \code{ICNTL(13)=1}，使根节点采用顺序分解路径，但这可能降低性能\cite{mumpsguide}。
+
+\section{延迟主元对 MUMPS 数值分解的影响}
+
+延迟主元发生后，实际分解与分析阶段的结构预测产生偏差，主要体现在以下方面：
+
+\begin{enumerate}
+  \item \textbf{波前扩大。} 延迟变量进入父节点的 Fully Summed 区，使父节点的实际波前大于符号预测。
+  \item \textbf{额外填充。} 延迟变量与父节点原有变量建立新的耦合，产生分析阶段未预测的因子非零元。
+  \item \textbf{计算量增加。} 父节点需要在更大的稠密波前上装配、搜索主元并更新 Schur 补。
+  \item \textbf{内存需求增加。} 贡献块和父节点波前同时增大，分析阶段的内存估计可能不足，因此 \code{ICNTL(14)} 提供额外工作空间比例，\code{ICNTL(23)} 可以设置每个进程的内存上限。
+  \item \textbf{并行负载偏移。} 节点与 MPI 进程的映射在分析阶段已经确定，延迟造成的新增工作仍沿既定消元树和候选进程集合执行，不会把普通节点任意迁移到全局空闲进程。
+\end{enumerate}
+
+\begin{keypoint}
+MUMPS 延迟主元的完整判定链是：使用 \code{CNTL(1)} 在 Fully Summed 候选区内搜索满足部分阈值条件的 $1\times1$ 主元；对称不定问题还按同一个 $u$ 检查 $2\times2$ 主元块；若所有允许候选均失败，则 \code{NPIV} 停止增长，并以 \code{NELIM=NASS-NPIV} 的形式把变量随贡献块传给父节点。\code{CNTL(4)} 的静态主元和 \code{ICNTL(24)} 的零主元检测是与这一过程相关、但含义不同的两套机制。
+\end{keypoint}

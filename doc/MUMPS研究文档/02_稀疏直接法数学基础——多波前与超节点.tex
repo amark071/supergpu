@@ -1,0 +1,377 @@
+\chapter{稀疏直接法数学基础：多波前法与超节点法}
+
+本章说明多波前法和超节点法的数学结构。多波前法以消去树节点对应的波前矩阵为计算单位，超节点法把非零结构相同或相近的一组连续列作为计算单位。两者都将标量稀疏消元重组为稠密块运算，但在数据组织和更新传播方式上有所区别\cite{liu1992,davis2006,demmel1999}。
+
+\section{消元、Schur 补与填充}
+
+考虑稀疏线性系统
+
+\[
+Ax=b,\qquad A\in\mathbb{R}^{n\times n}.
+\]
+
+一般非对称分解写为
+
+\[
+PAQ=LU,
+\]
+
+其中 $P,Q$ 是行、列置换矩阵。对称分解写为
+
+\[
+P^TAP=LDL^T.
+\]
+
+对称正定情形可以写成 Cholesky 形式 $P^TAP=LL^T$；一般对称不定情形的 $D$ 由 $1\times1$ 和 $2\times2$ 对角块组成。
+
+把矩阵分成主元变量 $p$ 和其余变量 $r$：
+
+\[
+A=
+\begin{bmatrix}
+A_{pp}&A_{pr}\\
+A_{rp}&A_{rr}
+\end{bmatrix}.
+\]
+
+若 $A_{pp}$ 可逆，则
+
+\[
+A=
+\begin{bmatrix}
+I&0\\
+A_{rp}A_{pp}^{-1}&I
+\end{bmatrix}
+\begin{bmatrix}
+A_{pp}&A_{pr}\\
+0&S
+\end{bmatrix},
+\qquad
+S=A_{rr}-A_{rp}A_{pp}^{-1}A_{pr}.
+\]
+
+$S$ 称为 Schur 补。原来为零的位置可能在 Schur 补中变成非零，这些新非零称为填充。稀疏排序通过改变变量消去次序控制填充、因子非零元数和中间稠密块的规模。
+
+对称矩阵的非零结构可以表示为无向图。消去一个顶点时，该顶点尚未消去的邻接点形成团；为形成这个团而增加的边对应填充。非对称矩阵通常通过对称化结构或二部图结构进行符号分析。
+
+\section{消去树与符号结构}
+
+消去树记录消元更新的依赖关系。以对称情形为例，若 $L$ 是符号 Cholesky 因子，则列 $j$ 的父节点可以定义为 $L(:,j)$ 中行号大于 $j$ 的第一个非零位置。子节点消元产生的 Schur 补更新沿父指针向上传递。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  node distance=0.9cm and 1.25cm,
+  every node/.style={draw,circle,minimum size=8mm,inner sep=0pt,font=\small},
+  edge/.style={-{Stealth[length=2mm]},semithick}
+]
+\node (r) {7};
+\node[below left=of r] (a) {5};
+\node[below right=of r] (b) {6};
+\node[below left=of a] (c) {1};
+\node[below=of a] (d) {2};
+\node[below left=of b] (e) {3};
+\node[below right=of b] (f) {4};
+\draw[edge] (c)--(a); \draw[edge] (d)--(a);
+\draw[edge] (e)--(b); \draw[edge] (f)--(b);
+\draw[edge] (a)--(r); \draw[edge] (b)--(r);
+\end{tikzpicture}
+\caption{消去树中的更新方向：子节点指向父节点。}
+\label{fig:elim-tree}
+\end{figure}
+
+消去树同时给出两种顺序：数值分解按后序从叶到根处理；使用因子求解时，前代和回代分别沿因子依赖的两个方向进行。位于不同树枝且依赖已经满足的节点彼此独立。
+
+排序、符号分解和数值分解的作用不同：排序确定结构次序；符号分解预测因子非零结构和树依赖；数值分解计算实际因子，并根据数值主元选择修正符号预测。
+
+\section{多波前法}
+
+\subsection{波前矩阵}
+
+对消去树中的一个节点，把本节点可以消去的变量记为 $E$，仍需传递到祖先节点的更新变量记为 $U$。按照 $E,U$ 排列，节点的稠密波前矩阵为
+
+\[
+F=
+\begin{bmatrix}
+F_{EE}&F_{EU}\\
+F_{UE}&F_{UU}
+\end{bmatrix}.
+\]
+
+$E$ 中的变量称为完全求和（fully summed）变量：与这些变量有关的原矩阵项和所有后代更新均已装配到当前波前，因此它们是当前节点的候选消去变量。$U$ 中的信息尚未在当前节点完全求和，只参与更新。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[font=\small]
+  \draw[thick] (0,0) rectangle (5,5);
+  \draw[thick] (2.05,0)--(2.05,5);
+  \draw[thick] (0,2.95)--(5,2.95);
+  \fill[MumpsBlue!16] (0,2.95) rectangle (2.05,5);
+  \fill[MumpsCyan!12] (2.05,2.95) rectangle (5,5);
+  \fill[MumpsCyan!12] (0,0) rectangle (2.05,2.95);
+  \fill[gray!12] (2.05,0) rectangle (5,2.95);
+  \node at (1.025,3.975) {$F_{EE}$};
+  \node at (3.525,3.975) {$F_{EU}$};
+  \node at (1.025,1.475) {$F_{UE}$};
+  \node at (3.525,1.475) {$F_{UU}$};
+  \node[above] at (1.025,5.08) {$E$};
+  \node[above] at (3.525,5.08) {$U$};
+  \node[left] at (-0.08,3.975) {$E$};
+  \node[left] at (-0.08,1.475) {$U$};
+\end{tikzpicture}
+\caption{方形波前矩阵的主元区和更新区。}
+\label{fig:frontal-matrix}
+\end{figure}
+
+非对称情形消去 $E$ 后得到
+
+\[
+P_FFQ_F=
+\begin{bmatrix}
+L_{EE}&0\\
+L_{UE}&I
+\end{bmatrix}
+\begin{bmatrix}
+U_{EE}&U_{EU}\\
+0&C
+\end{bmatrix},
+\]
+
+其中贡献块为
+
+\[
+C=F_{UU}-F_{UE}F_{EE}^{-1}F_{EU}.
+\]
+
+对称情形相应地写成
+
+\[
+P_F^TFP_F=
+\begin{bmatrix}
+L_{EE}&0\\L_{UE}&I
+\end{bmatrix}
+\begin{bmatrix}
+D_{EE}&0\\0&C
+\end{bmatrix}
+\begin{bmatrix}
+L_{EE}^T&L_{UE}^T\\0&I
+\end{bmatrix},
+\]
+
+\[
+C=F_{UU}-L_{UE}D_{EE}L_{UE}^T.
+\]
+
+节点保存已经得到的因子块，并把 $C$ 传给父节点。
+
+\subsection{装配与 extend-add}
+
+当前波前由原矩阵项和子节点贡献块相加得到。设 $F^{(A)}$ 是装配到本节点的原矩阵项，子节点 $c$ 的贡献块为 $C_c$，$R_c$ 把子节点局部变量编号映射到当前波前局部编号，则
+
+\[
+F=F^{(A)}+
+\sum_{c\in\operatorname{child}(F)}R_c^TC_cR_c.
+\]
+
+该操作称为扩展累加（extend-add）。$R_c$ 不要求子节点变量在父波前中连续；它根据全局变量编号完成嵌入和累加。所有子贡献到达后，本节点的完全求和区才完整。
+
+叶节点只装配原矩阵项；内部节点同时装配原矩阵项和子贡献；根节点消去剩余变量，不再向父节点产生贡献块。因而，多波前数值分解可以表示成消去树上的递归：
+
+\[
+\operatorname{factor}(v):
+\quad
+\bigl\{\operatorname{factor}(c)\bigr\}_{c\in\operatorname{child}(v)}
+\longrightarrow
+\operatorname{assemble}(F_v)
+\longrightarrow
+\operatorname{eliminate}(F_v)
+\longrightarrow C_v.
+\]
+
+\subsection{波前规模与运算量}
+
+设一个波前有 $f$ 个总变量，其中 $p$ 个在本节点消去，更新区规模为
+
+\[
+u=f-p.
+\]
+
+非对称情形需要存储主元列和主元行；其数量级为
+
+\[
+p(2f-p).
+\]
+
+对称情形只需存储一个三角部分，对应数量级为
+
+\[
+pf.
+\]
+
+数值工作由主元块分解、块行/块列求解和 Schur 补更新组成。当 $f\gg p$ 时，主要计算来自 $p\times u$ 与 $u\times p$ 形成的尾部更新；当 $p$ 较大时，主元块自身的稠密分解也占据主要部分。
+
+\section{超节点法}
+
+\subsection{超节点的定义}
+
+以列式因子 $L$ 为例，若一组连续列
+
+\[
+J=\{s,s+1,\ldots,t\}
+\]
+
+在对角块以下具有相同的非零行结构，则这些列可以组成一个超节点。设公共行集为 $R$，超节点在 $L$ 中的数值部分写成
+
+\[
+L_{J\cup R,J}=
+\begin{bmatrix}
+L_{JJ}\\
+L_{RJ}
+\end{bmatrix},
+\]
+
+其中 $L_{JJ}$ 是稠密下三角块，$L_{RJ}$ 是稠密矩形块。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=0.48cm,y=0.48cm,font=\small]
+  \draw[thick] (0,0) rectangle (10,10);
+  \foreach \x in {1,...,9} {\draw[gray!18] (\x,0)--(\x,10);}
+  \foreach \y in {1,...,9} {\draw[gray!18] (0,\y)--(10,\y);}
+  \fill[MumpsBlue!22] (2,6) rectangle (5,9);
+  \fill[MumpsCyan!20] (2,2) rectangle (5,6);
+  \draw[MumpsBlue,very thick] (2,2) rectangle (5,9);
+  \node at (3.5,7.5) {$L_{JJ}$};
+  \node at (3.5,4) {$L_{RJ}$};
+  \node[above,MumpsBlue] at (3.5,10.15) {连续列 $J$};
+  \draw[decorate,decoration={brace,amplitude=4pt},MumpsCyan]
+    (5.25,2)--(5.25,6) node[midway,right=5pt] {公共行集 $R$};
+\end{tikzpicture}
+\caption{超节点的连续列及其公共非零行结构。}
+\label{fig:supernode-structure}
+\end{figure}
+
+严格超节点要求列结构完全一致。实际算法还可以把结构接近的相邻列合并为松弛超节点，合并后显式保存由此产生的少量结构零。基本超节点由符号因子的精确结构确定；松弛合并在基本超节点之上进行\cite{demmel1999}。
+
+\subsection{超节点分解公式}
+
+在 Cholesky 或 $LDL^T$ 分解中，设前面超节点对当前列块 $J$ 的更新已经累加，当前块写成
+
+\[
+\begin{bmatrix}
+A_{JJ}^{(k)}\\
+A_{RJ}^{(k)}
+\end{bmatrix}.
+\]
+
+Cholesky 情形先计算
+
+\[
+L_{JJ}L_{JJ}^T=A_{JJ}^{(k)},
+\]
+
+再进行三角求解
+
+\[
+L_{RJ}=A_{RJ}^{(k)}L_{JJ}^{-T},
+\]
+
+随后对尚未分解部分施加块更新
+
+\[
+A_{RR}^{(k+1)}=A_{RR}^{(k)}-L_{RJ}L_{RJ}^T.
+\]
+
+一般对称不定情形写为
+
+\[
+A_{JJ}^{(k)}=L_{JJ}D_{JJ}L_{JJ}^T,
+\]
+
+\[
+L_{RJ}=A_{RJ}^{(k)}L_{JJ}^{-T}D_{JJ}^{-1},
+\]
+
+\[
+A_{RR}^{(k+1)}=A_{RR}^{(k)}-L_{RJ}D_{JJ}L_{RJ}^T.
+\]
+
+一般非对称超节点 LU 使用行超节点和列超节点形成面板。其块公式为
+
+\[
+\begin{bmatrix}
+A_{JJ}&A_{JK}\\
+A_{KJ}&A_{KK}
+\end{bmatrix}
+=
+\begin{bmatrix}
+L_{JJ}&0\\L_{KJ}&I
+\end{bmatrix}
+\begin{bmatrix}
+U_{JJ}&U_{JK}\\0&S_{KK}
+\end{bmatrix},
+\]
+
+\[
+U_{JK}=L_{JJ}^{-1}A_{JK},\qquad
+L_{KJ}=A_{KJ}U_{JJ}^{-1},
+\]
+
+\[
+S_{KK}=A_{KK}-L_{KJ}U_{JK}.
+\]
+
+这些公式把一组列的标量更新合并为三角求解和矩阵乘法。
+
+\subsection{左看、右看与上看组织}
+
+超节点分解可以按更新的产生和使用次序分类。
+
+\begin{itemize}
+  \item 左看：处理当前超节点时，收集所有以前超节点对它的更新，然后分解当前块；
+  \item 右看：一个超节点分解完成后，立即把它的更新散布到所有后续相关超节点；
+  \item 上看：按当前列或列块遍历因子结构，沿依赖索引寻找并累加以前列块的贡献。
+\end{itemize}
+
+三种组织使用相同的块分解恒等式，区别在于 Schur 补更新何时形成、存放在哪里以及何时累加到目标列块。
+
+\section{多波前法与超节点法的对应关系}
+
+两类方法都建立在排序后的消元结构上，也都用连续或相关的变量集合形成稠密块。它们的主要对应关系见\cref{tab:mf-sn}。
+
+\begin{table}[htbp]
+\centering
+\caption{多波前法与超节点法的数学组织}
+\label{tab:mf-sn}
+\begin{tabularx}{\textwidth}{p{0.18\textwidth}XX}
+\toprule
+项目 & 多波前法 & 超节点法 \\
+\midrule
+基本单位 & 消去树节点的波前矩阵 & 具有共同列结构的连续列块 \\
+子问题输入 & 原矩阵项和子节点贡献块 & 以前超节点对当前列块的更新 \\
+中间结果 & 显式贡献块 $C$ & 对后续超节点的块更新 \\
+结构索引 & 波前变量列表和父子关系 & 超节点列区间及其行结构 \\
+稠密计算 & 波前主元块分解与 Schur 补更新 & 对角块分解、TRSM 和块更新 \\
+依赖表示 & 波前消去树 & 超节点消去树或列依赖图 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+若把一个超节点及其尚未消去的更新行装配成方形局部矩阵，就得到与波前矩阵相同的 $E/U$ 分块；若把一个波前中连续且结构一致的主元列作为列块，则其主元计算又具有超节点形式。因此，两者的 Schur 补代数相同，差别主要在于稀疏数据如何分组和更新如何组织。
+
+\section{从分解到求解}
+
+分解得到因子后，一般非对称系统按
+
+\[
+y=L^{-1}Pb,\qquad x=Q\,U^{-1}y
+\]
+
+求解；对称系统按
+
+\[
+y=L^{-1}P^Tb,\qquad z=D^{-1}y,
+\qquad x=P\,L^{-T}z
+\]
+
+求解。多波前表示按消去树节点访问因子块，超节点表示按超节点列块访问因子。多个右端项时，标量或向量三角更新变成块三角求解和矩阵乘法。

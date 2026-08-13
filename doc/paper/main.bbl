@@ -1,0 +1,428 @@
+% $ biblatex auxiliary file $
+% $ biblatex bbl format version 3.2 $
+% Do not modify the above lines!
+%
+% This is an auxiliary file used by the 'biblatex' package.
+% This file may safely be deleted. It will be recreated by
+% biber as required.
+%
+\begingroup
+\makeatletter
+\@ifundefined{ver@biblatex.sty}
+  {\@latex@error
+     {Missing 'biblatex' package}
+     {The bibliography requires the 'biblatex' package.}
+      \aftergroup\endinput}
+  {}
+\endgroup
+
+
+\refsection{0}
+  \datalist[entry]{none/global//global/global}
+    \entry{qiu2020nndl}{book}{}
+      \name{author}{1}{}{%
+        {{hash=6d11751c2f76d4a9693e68e181641ddd}{%
+           family={邱锡鹏},
+           familyi={邱\bibinitperiod}}}%
+      }
+      \name{namea}{1}{}{%
+        {{hash=6d11751c2f76d4a9693e68e181641ddd}{%
+           family={邱锡鹏},
+           familyi={邱\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {chinese}%
+      }
+      \list{location}{1}{%
+        {北京}%
+      }
+      \list{publisher}{1}{%
+        {机械工业出版社}%
+      }
+      \strng{namehash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{fullhash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{bibnamehash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{authorbibnamehash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{authornamehash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{authorfullhash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{nameabibnamehash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{nameanamehash}{6d11751c2f76d4a9693e68e181641ddd}
+      \strng{nameafullhash}{6d11751c2f76d4a9693e68e181641ddd}
+      \field{sortinit}{1}
+      \field{sortinithash}{4f6aaa89bab872aa0999fec09ff8e98a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{isbn}{9787111649687}
+      \field{langid}{english}
+      \field{languageid}{chinese}
+      \field{lansortorder}{1}
+      \field{title}{神经网络与深度学习}
+      \field{usera}{M}
+      \field{userd}{chinese}
+      \field{userf}{chinese}
+      \field{year}{2020}
+      \field{dateera}{ce}
+      \verb{urlraw}
+      \verb https://nndl.github.io/
+      \endverb
+      \verb{url}
+      \verb https://nndl.github.io/
+      \endverb
+      \keyw{qiu2020nndl}
+    \endentry
+    \entry{casper2011pkuthss}{online}{}
+      \name{author}{1}{}{%
+        {{hash=29045bd5f9f636112eaaa19ab1f4c76e}{%
+           family={Vector},
+           familyi={V\bibinitperiod},
+           given={Casper\bibnamedelima Ti.},
+           giveni={C\bibinitperiod\bibinitdelim T\bibinitperiod}}}%
+      }
+      \name{namea}{1}{}{%
+        {{hash=29045bd5f9f636112eaaa19ab1f4c76e}{%
+           family={Vector},
+           familyi={V\bibinitperiod},
+           given={Casper\bibnamedelima Ti.},
+           giveni={C\bibinitperiod\bibinitdelim T\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {english}%
+      }
+      \strng{namehash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{fullhash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{bibnamehash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{authorbibnamehash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{authornamehash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{authorfullhash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{nameabibnamehash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{nameanamehash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \strng{nameafullhash}{29045bd5f9f636112eaaa19ab1f4c76e}
+      \field{sortinit}{3}
+      \field{sortinithash}{ad6fe7482ffbd7b9f99c9e8b5dccd3d7}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{languageid}{english}
+      \field{lansortorder}{4}
+      \field{title}{pkuthss: LaTeX template for dissertations in Peking University}
+      \field{urlday}{26}
+      \field{urlmonth}{6}
+      \field{urlyear}{2011}
+      \field{usera}{EB}
+      \field{userd}{english}
+      \field{userf}{english}
+      \field{year}{2011}
+      \field{dateera}{ce}
+      \field{urldateera}{ce}
+      \verb{urlraw}
+      \verb https://gitea.com/CasperVector/pkuthss
+      \endverb
+      \verb{url}
+      \verb https://gitea.com/CasperVector/pkuthss
+      \endverb
+      \keyw{casper2011pkuthss}
+    \endentry
+    \entry{devlin2018bert}{article}{}
+      \name{author}{4}{}{%
+        {{hash=13202969e372bc82318f9629cbdd199b}{%
+           family={Devlin},
+           familyi={D\bibinitperiod},
+           given={Jacob},
+           giveni={J\bibinitperiod}}}%
+        {{hash=a45784fe7163b45f11d166564f5d24b6}{%
+           family={Chang},
+           familyi={C\bibinitperiod},
+           given={Ming-Wei},
+           giveni={M\bibinithyphendelim W\bibinitperiod}}}%
+        {{hash=8dde73b4194f5bc4230c4808f3fc1534}{%
+           family={Lee},
+           familyi={L\bibinitperiod},
+           given={Kenton},
+           giveni={K\bibinitperiod}}}%
+        {{hash=b92aa283415413bb8d2a1548716d0c7d}{%
+           family={Toutanova},
+           familyi={T\bibinitperiod},
+           given={Kristina},
+           giveni={K\bibinitperiod}}}%
+      }
+      \name{namea}{4}{}{%
+        {{hash=13202969e372bc82318f9629cbdd199b}{%
+           family={Devlin},
+           familyi={D\bibinitperiod},
+           given={Jacob},
+           giveni={J\bibinitperiod}}}%
+        {{hash=a45784fe7163b45f11d166564f5d24b6}{%
+           family={Chang},
+           familyi={C\bibinitperiod},
+           given={Ming-Wei},
+           giveni={M\bibinithyphendelim W\bibinitperiod}}}%
+        {{hash=8dde73b4194f5bc4230c4808f3fc1534}{%
+           family={Lee},
+           familyi={L\bibinitperiod},
+           given={Kenton},
+           giveni={K\bibinitperiod}}}%
+        {{hash=b92aa283415413bb8d2a1548716d0c7d}{%
+           family={Toutanova},
+           familyi={T\bibinitperiod},
+           given={Kristina},
+           giveni={K\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {english}%
+      }
+      \strng{namehash}{ad8e2e2a80d28ade21e86852b804fc9b}
+      \strng{fullhash}{e8bccd48302a14eeba57d9dce2f49ef4}
+      \strng{bibnamehash}{760df5af1463fdc901455117e4fefd96}
+      \strng{authorbibnamehash}{760df5af1463fdc901455117e4fefd96}
+      \strng{authornamehash}{ad8e2e2a80d28ade21e86852b804fc9b}
+      \strng{authorfullhash}{e8bccd48302a14eeba57d9dce2f49ef4}
+      \strng{nameabibnamehash}{760df5af1463fdc901455117e4fefd96}
+      \strng{nameanamehash}{ad8e2e2a80d28ade21e86852b804fc9b}
+      \strng{nameafullhash}{e8bccd48302a14eeba57d9dce2f49ef4}
+      \field{sortinit}{4}
+      \field{sortinithash}{9381316451d1b9788675a07e972a12a7}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Proceedings of the 2019 Conference of the North {A}merican Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers)}
+      \field{langid}{english}
+      \field{languageid}{english}
+      \field{lansortorder}{4}
+      \field{title}{Bert: Pre-training of deep bidirectional transformers for language understanding}
+      \field{usera}{J}
+      \field{userd}{english}
+      \field{userf}{english}
+      \field{year}{2019}
+      \field{dateera}{ce}
+      \keyw{devlin2018bert}
+    \endentry
+    \entry{yang2019xlnet}{inproceedings}{}
+      \name{author}{6}{}{%
+        {{hash=6b1fa069ba3a41402c63a24209e47289}{%
+           family={Yang},
+           familyi={Y\bibinitperiod},
+           given={Zhilin},
+           giveni={Z\bibinitperiod}}}%
+        {{hash=74ae4c193de464cda59c8066619514fd}{%
+           family={Dai},
+           familyi={D\bibinitperiod},
+           given={Zihang},
+           giveni={Z\bibinitperiod}}}%
+        {{hash=be6dc43fe1771d8870237ce7a47c6f7f}{%
+           family={Yang},
+           familyi={Y\bibinitperiod},
+           given={Yiming},
+           giveni={Y\bibinitperiod}}}%
+        {{hash=4e523aba9ce388c6b542f2f6e52293c2}{%
+           family={Carbonell},
+           familyi={C\bibinitperiod},
+           given={Jaime},
+           giveni={J\bibinitperiod}}}%
+        {{hash=f0b8bc62189ed0fc13d8da5338458baa}{%
+           family={Salakhutdinov},
+           familyi={S\bibinitperiod},
+           given={Russ\bibnamedelima R},
+           giveni={R\bibinitperiod\bibinitdelim R\bibinitperiod}}}%
+        {{hash=c636f146591d51579a8119b777394878}{%
+           family={Le},
+           familyi={L\bibinitperiod},
+           given={Quoc\bibnamedelima V},
+           giveni={Q\bibinitperiod\bibinitdelim V\bibinitperiod}}}%
+      }
+      \name{editor}{6}{}{%
+        {{hash=1444141e07dd9549dbb4b8530fe4ec15}{%
+           family={Wallach},
+           familyi={W\bibinitperiod},
+           given={H.},
+           giveni={H\bibinitperiod}}}%
+        {{hash=6c15b92d4ebdbfae091f6548dc7543ae}{%
+           family={Larochelle},
+           familyi={L\bibinitperiod},
+           given={H.},
+           giveni={H\bibinitperiod}}}%
+        {{hash=02854da982edf66ffa27f4fc1c738779}{%
+           family={Beygelzimer},
+           familyi={B\bibinitperiod},
+           given={A.},
+           giveni={A\bibinitperiod}}}%
+        {{hash=d09836e3ea5c71d2c9e7d1c56ab7ffdd}{%
+           family={d'Alché-Buc},
+           familyi={d\bibinithyphendelim B\bibinitperiod},
+           given={F.},
+           giveni={F\bibinitperiod}}}%
+        {{hash=f81d803635cc159bfc9d9145ebd34a14}{%
+           family={Fox},
+           familyi={F\bibinitperiod},
+           given={E.},
+           giveni={E\bibinitperiod}}}%
+        {{hash=36b98b7ab533936cf1b5716148de704f}{%
+           family={Garnett},
+           familyi={G\bibinitperiod},
+           given={R.},
+           giveni={R\bibinitperiod}}}%
+      }
+      \name{namea}{6}{}{%
+        {{hash=6b1fa069ba3a41402c63a24209e47289}{%
+           family={Yang},
+           familyi={Y\bibinitperiod},
+           given={Zhilin},
+           giveni={Z\bibinitperiod}}}%
+        {{hash=74ae4c193de464cda59c8066619514fd}{%
+           family={Dai},
+           familyi={D\bibinitperiod},
+           given={Zihang},
+           giveni={Z\bibinitperiod}}}%
+        {{hash=be6dc43fe1771d8870237ce7a47c6f7f}{%
+           family={Yang},
+           familyi={Y\bibinitperiod},
+           given={Yiming},
+           giveni={Y\bibinitperiod}}}%
+        {{hash=4e523aba9ce388c6b542f2f6e52293c2}{%
+           family={Carbonell},
+           familyi={C\bibinitperiod},
+           given={Jaime},
+           giveni={J\bibinitperiod}}}%
+        {{hash=f0b8bc62189ed0fc13d8da5338458baa}{%
+           family={Salakhutdinov},
+           familyi={S\bibinitperiod},
+           given={Russ\bibnamedelima R},
+           giveni={R\bibinitperiod\bibinitdelim R\bibinitperiod}}}%
+        {{hash=c636f146591d51579a8119b777394878}{%
+           family={Le},
+           familyi={L\bibinitperiod},
+           given={Quoc\bibnamedelima V},
+           giveni={Q\bibinitperiod\bibinitdelim V\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {english}%
+      }
+      \list{publisher}{1}{%
+        {Curran Associates, Inc.}%
+      }
+      \strng{namehash}{c01d380693737340325a0771b3b3b362}
+      \strng{fullhash}{308290fc3b0f16e1d05ec46cd8f82722}
+      \strng{bibnamehash}{5e09e7647c4868613f32d8c8ef157089}
+      \strng{authorbibnamehash}{5e09e7647c4868613f32d8c8ef157089}
+      \strng{authornamehash}{c01d380693737340325a0771b3b3b362}
+      \strng{authorfullhash}{308290fc3b0f16e1d05ec46cd8f82722}
+      \strng{editorbibnamehash}{0de37f542986de8c829caa7ca6c28ff6}
+      \strng{editornamehash}{d8a1689cbb7ff26be8b55bdda56fab83}
+      \strng{editorfullhash}{1fe7b3f8b138b9bcec056a9c1ca77fef}
+      \strng{nameabibnamehash}{5e09e7647c4868613f32d8c8ef157089}
+      \strng{nameanamehash}{c01d380693737340325a0771b3b3b362}
+      \strng{nameafullhash}{308290fc3b0f16e1d05ec46cd8f82722}
+      \field{sortinit}{6}
+      \field{sortinithash}{b33bc299efb3c36abec520a4c896a66d}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Advances in Neural Information Processing Systems}
+      \field{langid}{english}
+      \field{languageid}{english}
+      \field{lansortorder}{4}
+      \field{title}{XLNet: Generalized Autoregressive Pretraining for Language Understanding}
+      \field{usera}{C}
+      \field{userc}{english}
+      \field{userd}{english}
+      \field{userf}{english}
+      \field{volume}{32}
+      \field{year}{2019}
+      \field{dateera}{ce}
+      \verb{urlraw}
+      \verb https://proceedings.neurips.cc/paper/2019/file/dc6a7e655d7e5840e66733e9ee67cc69-Paper.pdf
+      \endverb
+      \verb{url}
+      \verb https://proceedings.neurips.cc/paper/2019/file/dc6a7e655d7e5840e66733e9ee67cc69-Paper.pdf
+      \endverb
+      \keyw{yang2019xlnet}
+    \endentry
+    \entry{liu2003uncertain}{book}{}
+      \name{author}{1}{}{%
+        {{hash=d76463d6105b45d39db59806f13944dd}{%
+           family={刘宝碇},
+           familyi={刘\bibinitperiod}}}%
+      }
+      \name{namea}{1}{}{%
+        {{hash=d76463d6105b45d39db59806f13944dd}{%
+           family={刘宝碇},
+           familyi={刘\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {chinese}%
+      }
+      \list{publisher}{1}{%
+        {清华大学出版社有限公司}%
+      }
+      \strng{namehash}{d76463d6105b45d39db59806f13944dd}
+      \strng{fullhash}{d76463d6105b45d39db59806f13944dd}
+      \strng{bibnamehash}{d76463d6105b45d39db59806f13944dd}
+      \strng{authorbibnamehash}{d76463d6105b45d39db59806f13944dd}
+      \strng{authornamehash}{d76463d6105b45d39db59806f13944dd}
+      \strng{authorfullhash}{d76463d6105b45d39db59806f13944dd}
+      \strng{nameabibnamehash}{d76463d6105b45d39db59806f13944dd}
+      \strng{nameanamehash}{d76463d6105b45d39db59806f13944dd}
+      \strng{nameafullhash}{d76463d6105b45d39db59806f13944dd}
+      \field{sortinit}{8}
+      \field{sortinithash}{a231b008ebf0ecbe0b4d96dcc159445f}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{languageid}{chinese}
+      \field{lansortorder}{1}
+      \field{title}{不确定规划及应用}
+      \field{usera}{M}
+      \field{userd}{chinese}
+      \field{userf}{chinese}
+      \field{volume}{1}
+      \field{year}{2003}
+      \field{dateera}{ce}
+      \keyw{liu2003uncertain}
+    \endentry
+    \entry{gut2013probability}{book}{}
+      \name{author}{1}{}{%
+        {{hash=0a158dec58d0843364ab135af046a928}{%
+           family={Gut},
+           familyi={G\bibinitperiod},
+           given={Allan},
+           giveni={A\bibinitperiod}}}%
+      }
+      \name{namea}{1}{}{%
+        {{hash=0a158dec58d0843364ab135af046a928}{%
+           family={Gut},
+           familyi={G\bibinitperiod},
+           given={Allan},
+           giveni={A\bibinitperiod}}}%
+      }
+      \list{language}{1}{%
+        {english}%
+      }
+      \list{publisher}{1}{%
+        {Springer Science \& Business Media}%
+      }
+      \strng{namehash}{0a158dec58d0843364ab135af046a928}
+      \strng{fullhash}{0a158dec58d0843364ab135af046a928}
+      \strng{bibnamehash}{0a158dec58d0843364ab135af046a928}
+      \strng{authorbibnamehash}{0a158dec58d0843364ab135af046a928}
+      \strng{authornamehash}{0a158dec58d0843364ab135af046a928}
+      \strng{authorfullhash}{0a158dec58d0843364ab135af046a928}
+      \strng{nameabibnamehash}{0a158dec58d0843364ab135af046a928}
+      \strng{nameanamehash}{0a158dec58d0843364ab135af046a928}
+      \strng{nameafullhash}{0a158dec58d0843364ab135af046a928}
+      \field{sortinit}{1}
+      \field{sortinithash}{4f6aaa89bab872aa0999fec09ff8e98a}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{langid}{english}
+      \field{languageid}{english}
+      \field{lansortorder}{4}
+      \field{title}{Probability: a graduate course}
+      \field{usera}{M}
+      \field{userd}{english}
+      \field{userf}{english}
+      \field{volume}{75}
+      \field{year}{2013}
+      \field{dateera}{ce}
+      \keyw{gut2013probability}
+    \endentry
+  \enddatalist
+\endrefsection
+\endinput
+

@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2024.7.18)  11 AUG 2026 17:52
+This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2024.7.18)  13 AUG 2026 11:05
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -1418,9 +1418,45 @@ Package: array 2023/10/16 v2.5g Tabular extension package (FMi)
 \rotheadsize=\dimen342
 \c@nlinenum=\count507
 \TeXr@lab=\toks41
+) (c:/texlive/2024/texmf-dist/tex/latex/listings/listings.sty
+\lst@mode=\count508
+\lst@gtempboxa=\box86
+\lst@token=\toks42
+\lst@length=\count509
+\lst@currlwidth=\dimen343
+\lst@column=\count510
+\lst@pos=\count511
+\lst@lostspace=\dimen344
+\lst@width=\dimen345
+\lst@newlines=\count512
+\lst@lineno=\count513
+\lst@maxwidth=\dimen346
+ (c:/texlive/2024/texmf-dist/tex/latex/listings/lstpatch.sty
+File: lstpatch.sty 2024/02/21 1.10 (Carsten Heinz)
+) (c:/texlive/2024/texmf-dist/tex/latex/listings/lstmisc.sty
+File: lstmisc.sty 2024/02/21 1.10 (Carsten Heinz)
+\c@lstnumber=\count514
+\lst@skipnumbers=\count515
+\lst@framebox=\box87
+) (c:/texlive/2024/texmf-dist/tex/latex/listings/listings.cfg
+File: listings.cfg 2024/02/21 1.10 listings configuration
+))
+Package: listings 2024/02/21 1.10 (Carsten Heinz)
+ (c:/texlive/2024/texmf-dist/tex/xelatex/xecjk/xeCJK-listings.sty
+Package: xeCJK-listings 2022/08/05 v3.9.1 xeCJK patch file for listings
+\l__xeCJK_listings_max_char_int=\count516
+\l__xeCJK_listings_flag_int=\count517
+) (c:/texlive/2024/texmf-dist/tex/generic/pgf/libraries/pgflibraryarrows.meta.code.tex
+File: pgflibraryarrows.meta.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfarrowinset=\dimen347
+\pgfarrowlength=\dimen348
+\pgfarrowwidth=\dimen349
+\pgfarrowlinewidth=\dimen350
+) (c:/texlive/2024/texmf-dist/tex/generic/pgf/frontendlayer/tikz/libraries/tikzlibrarypositioning.code.tex
+File: tikzlibrarypositioning.code.tex 2023-01-15 v3.1.10 (3.1.10)
 )
-\@quotelevel=\count508
-\@quotereset=\count509
+\@quotelevel=\count518
+\@quotereset=\count519
 
 
 LaTeX Warning: Unused global option(s):
@@ -1429,26 +1465,26 @@ LaTeX Warning: Unused global option(s):
 (./main.aux (./chap/copy.aux) (./chap/abs.aux) (./chap/deno.aux) (./chap/chap1.aux) (./chap/chap2.aux) (./chap/chap3.aux) (./chap/chap4.aux) (./chap/chap5.aux) (./chap/chap6.aux) (./chap/ach.aux) (./chap/ack.aux) (./chap/origin.aux))
 \openout1 = `main.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 69.
-LaTeX Font Info:    ... okay on input line 69.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 77.
+LaTeX Font Info:    ... okay on input line 77.
 
 *geometry* driver: auto-detecting
 *geometry* detected driver: xetex
@@ -1486,29 +1522,30 @@ LaTeX Font Info:    ... okay on input line 69.
 
 Package caption Info: Begin \AtBeginDocument code.
 Package caption Info: hyperref package is loaded.
+Package caption Info: listings package is loaded.
 Package caption Info: longtable package is loaded.
 (c:/texlive/2024/texmf-dist/tex/latex/caption/ltcaption.sty
 Package: ltcaption 2021/01/08 v1.4c longtable captions (AR)
 )
 Package caption Info: scrextend package is loaded.
-\caption@addmargin@hsize=\dimen343
-\caption@addmargin@linewidth=\dimen344
+\caption@addmargin@hsize=\dimen351
+\caption@addmargin@linewidth=\dimen352
 Package caption Info: End \AtBeginDocument code.
 LaTeX Font Info:    Overwriting math alphabet `\mathtt' in version `normal'
-(Font)                  OT1/cmtt/m/n --> TU/lmtt/m/n on input line 69.
+(Font)                  OT1/cmtt/m/n --> TU/lmtt/m/n on input line 77.
 LaTeX Font Info:    Overwriting math alphabet `\mathtt' in version `bold'
-(Font)                  OT1/cmtt/m/n --> TU/lmtt/b/n on input line 69.
-Package hyperref Info: Option `bookmarksnumbered' set `true' on input line 69.
-Package hyperref Info: Option `bookmarksopen' set `true' on input line 69.
-Package hyperref Info: Option `unicode' set `true' on input line 69.
-Package hyperref Info: Option `psdextra' set `true' on input line 69.
+(Font)                  OT1/cmtt/m/n --> TU/lmtt/b/n on input line 77.
+Package hyperref Info: Option `bookmarksnumbered' set `true' on input line 77.
+Package hyperref Info: Option `bookmarksopen' set `true' on input line 77.
+Package hyperref Info: Option `unicode' set `true' on input line 77.
+Package hyperref Info: Option `psdextra' set `true' on input line 77.
  (c:/texlive/2024/texmf-dist/tex/latex/hyperref/psdextra.def
 File: psdextra.def 2024-01-20 v7.01h Hyperref: Additions to PDF string support
 )
-Package hyperref Info: Option `breaklinks' set `true' on input line 69.
-Package hyperref Info: Option `plainpages' set `false' on input line 69.
-Package hyperref Info: Option `pdfdisplaydoctitle' set `true' on input line 69.
-Package hyperref Info: Link coloring OFF on input line 69.
+Package hyperref Info: Option `breaklinks' set `true' on input line 77.
+Package hyperref Info: Option `plainpages' set `false' on input line 77.
+Package hyperref Info: Option `pdfdisplaydoctitle' set `true' on input line 77.
+Package hyperref Info: Link coloring OFF on input line 77.
  (./main.out) (./main.out)
 \@outlinefile=\write6
 \openout6 = `main.out'.
@@ -1525,11 +1562,11 @@ Package biblatex Info: Automatic encoding selection.
 \openout4 = `main.bcf'.
 
 Package biblatex Info: Trying to load bibliographic data...
-Package biblatex Info: ... file 'main.bbl' not found.
-
-No file main.bbl.
-Package biblatex Info: Reference section=0 on input line 69.
-Package biblatex Info: Reference segment=0 on input line 69.
+Package biblatex Info: ... file 'main.bbl' found.
+ (./main.bbl)
+Package biblatex Info: Reference section=0 on input line 77.
+Package biblatex Info: Reference segment=0 on input line 77.
+\c@lstlisting=\count520
 File: pkulogo.pdf Graphic file (type pdf)
 <use pkulogo.pdf>
 File: pkuword.pdf Graphic file (type pdf)
@@ -1549,26 +1586,27 @@ Package fontspec Info: Font family 'FandolHei(0)' created for font 'FandolHei'
 (fontspec)             <->"[FandolHei-Bold.otf]/OT:language=dflt;"
 (fontspec)             - 'bold small caps'  (b/sc) with NFSS spec.: 
 
-\thss@tmp@linecount=\count510
+\thss@tmp@linecount=\count521
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
-(Font)              scaled to size 16.0617pt on input line 73.
+(Font)              scaled to size 16.0617pt on input line 81.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
-(Font)              scaled to size 14.05399pt on input line 73.
+(Font)              scaled to size 14.05399pt on input line 81.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
-(Font)              scaled to size 10.54048pt on input line 73.
+(Font)              scaled to size 10.54048pt on input line 81.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
-(Font)              scaled to size 16.05827pt on input line 73.
+(Font)              scaled to size 16.05827pt on input line 81.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
-(Font)              scaled to size 14.05098pt on input line 73.
+(Font)              scaled to size 14.05098pt on input line 81.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
-(Font)              scaled to size 10.53824pt on input line 73.
+(Font)              scaled to size 10.53824pt on input line 81.
+
 
 LaTeX Font Warning: Font shape `OMX/cmex/m/n' in size <16.06> not available
-(Font)              size <17.28> substituted on input line 73.
+(Font)              size <17.28> substituted on input line 81.
 
 
 LaTeX Font Warning: Font shape `OMX/cmex/m/n' in size <10.53937> not available
-(Font)              size <10.95> substituted on input line 73.
+(Font)              size <10.95> substituted on input line 81.
 
 
 Package fontspec Info: Font family 'FandolFang(0)' created for font
@@ -1582,12 +1620,12 @@ Package fontspec Info: Font family 'FandolFang(0)' created for font
 (fontspec)             <->"[FandolFang-Regular.otf]/OT:language=dflt;"
 (fontspec)             - 'small caps'  (m/sc) with NFSS spec.: 
 
-\thss@tmp@linecount=\count511
-\thss@tmp@linecount=\count512
-\thss@tmp@linecount=\count513
-\thss@tmp@linecount=\count514
-\thss@tmp@linecount=\count515
-\thss@tmp@linecount=\count516
+\thss@tmp@linecount=\count522
+\thss@tmp@linecount=\count523
+\thss@tmp@linecount=\count524
+\thss@tmp@linecount=\count525
+\thss@tmp@linecount=\count526
+\thss@tmp@linecount=\count527
 [1
 
 
@@ -1644,21 +1682,21 @@ LaTeX Font Info:    Font shape `TU/texgyreheros(0)/b/n' will be
 
 
 
-] (./main.toc)
+] (./main.toc [5
+
+
+])
 \tf@toc=\write7
 \openout7 = `main.toc'.
 
- [5
-
-
-] [6
-
-
-] (./main.lot)
+ [6] (./main.lot)
 \tf@lot=\write8
 \openout8 = `main.lot'.
 
- [7] [8
+ [7
+
+
+] [8
 
 
 ] (./main.lof)
@@ -1697,10 +1735,6 @@ LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/b/n' will be
 (Font)              scaled to size 9.03278pt on input line 8.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/b/n' will be
 (Font)              scaled to size 7.22623pt on input line 8.
-
-
-LaTeX Warning: Citation 'qiu2020nndl' on page 11 undefined on input line 21.
-
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
 (Font)              scaled to size 9.0347pt on input line 21.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
@@ -1713,9 +1747,6 @@ LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
 (Font)              scaled to size 5.99936pt on input line 21.
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
 (Font)              scaled to size 4.99947pt on input line 21.
-
-LaTeX Warning: Citation 'qiu2020nndl' on page 11 undefined on input line 21.
-
 ) [11
 
 
@@ -1730,10 +1761,7 @@ LaTeX Warning: Citation 'qiu2020nndl' on page 11 undefined on input line 21.
  (./chap/chap1.tex
 第一章
 
-LaTeX Warning: Citation 'casper2011pkuthss' on page 1 undefined on input line 4.
-
-
-Underfull \vbox (badness 1308) has occurred while \output is active []
+Underfull \vbox (badness 2237) has occurred while \output is active []
 
  [1
 
@@ -1750,24 +1778,6 @@ LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
 LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
 (Font)              scaled to size 6.99925pt on input line 144.
 
-
-LaTeX Warning: Citation 'devlin2018bert' on page 4 undefined on input line 170.
-
-
-LaTeX Warning: Citation '' on page 4 undefined on input line 170.
-
-
-LaTeX Warning: Citation 'yang2019xlnet' on page 4 undefined on input line 171.
-
-
-LaTeX Warning: Citation '' on page 4 undefined on input line 171.
-
-
-Overfull \hbox (51.84845pt too wide) in paragraph at lines 166--176
-[][] 
- []
-
-
 Underfull \hbox (badness 10000) in paragraph at lines 166--176
 
  []
@@ -1781,34 +1791,7 @@ File: img/pku-fig-logo.png Graphic file (type bmp)
 <img/pku-fig-logo.png>
 File: img/pku-text-logo.png Graphic file (type bmp)
 <img/pku-text-logo.png>
-
-
-LaTeX Warning: Citation 'liu2003uncertain' on page 5 undefined on input line 235.
-
-
-LaTeX Warning: Citation 'liu2003uncertain' on page 5 undefined on input line 235.
-
-
-LaTeX Warning: Citation '' on page 5 undefined on input line 235.
-
-
-Overfull \hbox (13.73355pt too wide) in paragraph at lines 235--236
-[]\TU/FandolSong(0)/m/n/12.045 上 述 公 式 来 源 于[]的  |《不 确 定 规 划》| [][]。| 
- []
-
-[5]
-
-LaTeX Warning: Citation 'devlin2018bert' on page 6 undefined on input line 242.
-
-
-LaTeX Warning: Citation 'gut2013probability' on page 6 undefined on input line 242.
-
-
-Overfull \hbox (103.77307pt too wide) in paragraph at lines 242--244
-[]\TU/FandolSong(0)/m/n/12.045 例 如[][]\TU/lmtt/m/n/12.045 \cite{devlin2018bert}[]\TU/XITS(0)/m/n/12.045 =$[]$\TU/FandolSong(0)/m/n/12.045 ，| [][]\TU/lmtt/m/n/12.045 \citeauthor{gut2013probability}[]\TU/XITS(0)/m/n/12.045 =[]\TU/FandolSong(0)/m/n/12.045 ，|
- []
-
-) [6]
+ [5]) [6]
 \openout2 = `chap/chap2.aux'.
 
  (./chap/chap2.tex
@@ -1830,10 +1813,83 @@ Overfull \hbox (103.77307pt too wide) in paragraph at lines 242--244
 
 ]
 第三章
-) [9]
+[9] [10] [11]
+Underfull \vbox (badness 1552) has occurred while \output is active []
+
+ [12]
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 238.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 238.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 238.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 238.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 238.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 238.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 248.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 248.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 248.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 248.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 248.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 248.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 258.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `subscript' on input line 258.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 258.
+
+[13] [14] [15] [16] [17]
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 556.
+
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 556.
+
+[18] [19] [20]) [21]
 \openout2 = `chap/chap4.aux'.
 
- (./chap/chap4.tex [10
+ (./chap/chap4.tex [22
 
 
 
@@ -1841,10 +1897,10 @@ Overfull \hbox (103.77307pt too wide) in paragraph at lines 242--244
 
 ]
 第四章
-) [11]
+) [23]
 \openout2 = `chap/chap5.aux'.
 
- (./chap/chap5.tex [12
+ (./chap/chap5.tex [24
 
 
 
@@ -1852,10 +1908,10 @@ Overfull \hbox (103.77307pt too wide) in paragraph at lines 242--244
 
 ]
 第五章
-) [13]
+) [25]
 \openout2 = `chap/chap6.aux'.
 
- (./chap/chap6.tex [14
+ (./chap/chap6.tex [26
 
 
 
@@ -1863,19 +1919,19 @@ Overfull \hbox (103.77307pt too wide) in paragraph at lines 242--244
 
 ]
 第六章
-) [15]
+) [27] [28
 
-LaTeX Warning: Empty bibliography on input line 98.
 
+
+
+] [29]
 \openout2 = `chap/ach.aux'.
 
-(./chap/ach.tex [16
+ (./chap/ach.tex [30
 
 
 
-
-
-]) [17] [18
+]) [31] [32
 
 
 
@@ -1883,14 +1939,14 @@ LaTeX Warning: Empty bibliography on input line 98.
 ]
 \openout2 = `chap/ack.aux'.
 
- (./chap/ack.tex) [19
+ (./chap/ack.tex) [33
 
 
 
 ]
 \openout2 = `chap/origin.aux'.
 
- (./chap/origin.tex [20
+ (./chap/origin.tex [34
 
 
 
@@ -1904,7 +1960,7 @@ Overfull \hbox (589.44579pt too wide) in paragraph at lines 46--47
 [][][][][][][] 
  []
 
-) [21] (./main.aux (./chap/copy.aux) (./chap/abs.aux) (./chap/deno.aux) (./chap/chap1.aux) (./chap/chap2.aux) (./chap/chap3.aux) (./chap/chap4.aux) (./chap/chap5.aux) (./chap/chap6.aux) (./chap/ach.aux) (./chap/ack.aux) (./chap/origin.aux))
+) [35] (./main.aux (./chap/copy.aux) (./chap/abs.aux) (./chap/deno.aux) (./chap/chap1.aux) (./chap/chap2.aux) (./chap/chap3.aux) (./chap/chap4.aux) (./chap/chap5.aux) (./chap/chap6.aux) (./chap/ach.aux) (./chap/ack.aux) (./chap/origin.aux))
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2022/08/05>
@@ -1914,27 +1970,19 @@ L3 programming layer <2022/08/05>
 LaTeX Font Warning: Size substitutions with differences
 (Font)              up to 1.22pt have occurred.
 
-
-LaTeX Warning: There were undefined references.
-
 Package rerunfilecheck Info: File `main.out' has not changed.
-(rerunfilecheck)             Checksum: D3B97521863914E3850E56502037EA70;3154.
-
-Package biblatex Warning: Please (re)run Biber on the file:
-(biblatex)                main
-(biblatex)                and rerun LaTeX afterwards.
-
+(rerunfilecheck)             Checksum: 3A8E7E4BBA54B5314E7CE8ED7FC8FAAF;8381.
 Package logreq Info: Writing requests to 'main.run.xml'.
 \openout1 = `main.run.xml'.
 
  ) 
 Here is how much of TeX's memory you used:
- 44903 strings out of 476720
- 930726 string characters out of 5801444
- 1973806 words of memory out of 5000000
- 66141 multiletter control sequences out of 15000+600000
- 569510 words of font info for 175 fonts, out of 8000000 for 9000
+ 46736 strings out of 476720
+ 968468 string characters out of 5801444
+ 2011566 words of memory out of 5000000
+ 67939 multiletter control sequences out of 15000+600000
+ 569582 words of font info for 184 fonts, out of 8000000 for 9000
  36 hyphenation exceptions out of 8191
- 123i,20n,128p,1201b,2123s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 123i,20n,128p,1201b,5270s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on main.pdf (37 pages).
+Output written on main.pdf (51 pages).
