@@ -112,7 +112,13 @@ set_target_properties(gpu_supernodal_ldlt PROPERTIES
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
-add_executable(supernodal_gpu main.cpp)
+add_executable(supernodal_gpu
+    main.cpp
+    src/supernodal_app.cpp
+    src/symbolic_pipeline.cpp
+    utils/solution_verification.cpp
+    utils/symbolic_cache.cpp
+)
 target_link_libraries(supernodal_gpu
     PRIVATE io_func ordering cholmod_symbolic gpu_supernodal_ldlt
 )

@@ -17,30 +17,29 @@
 \contentsline {section}{\numberline {3.1}非对称稠密矩阵的延迟主元 LU 方法}{9}{section.3.1}%
 \contentsline {subsection}{\numberline {3.1.1}分解 Fully Summed 块}{9}{subsection.3.1.1}%
 \contentsline {subsubsection}{\numberline {3.1.1.1}主元接受阈值}{10}{subsubsection.3.1.1.1}%
-\contentsline {subsubsection}{\numberline {3.1.1.2}right-looking 更新}{11}{subsubsection.3.1.1.2}%
-\contentsline {subsubsection}{\numberline {3.1.1.3}列延迟优化}{11}{subsubsection.3.1.1.3}%
+\contentsline {subsubsection}{\numberline {3.1.1.2}列延迟优化}{11}{subsubsection.3.1.1.2}%
+\contentsline {subsubsection}{\numberline {3.1.1.3}right-looking 更新}{11}{subsubsection.3.1.1.3}%
 \contentsline {subsubsection}{\numberline {3.1.1.4}自适应 KJI--SAXPY 分块优化}{12}{subsubsection.3.1.1.4}%
-\contentsline {subsection}{\numberline {3.1.2}Step 2：更新波前矩阵}{13}{subsection.3.1.2}%
-\contentsline {subsubsection}{\numberline {3.1.2.1}Step 2.1：更新 $A_{UE}$、$A_{EU}$}{13}{subsubsection.3.1.2.1}%
+\contentsline {subsection}{\numberline {3.1.2}Step 2：更新波前矩阵}{12}{subsection.3.1.2}%
+\contentsline {subsubsection}{\numberline {3.1.2.1}Step 2.1：更新 $A_{UE}$、$A_{EU}$}{12}{subsubsection.3.1.2.1}%
 \contentsline {subsubsection}{\numberline {3.1.2.2}Step 2.2：更新 $A_{DU}$、$A_{UD}$}{13}{subsubsection.3.1.2.2}%
 \contentsline {subsubsection}{\numberline {3.1.2.3}Step 2.3：更新 $A_{UU}$}{13}{subsubsection.3.1.2.3}%
-\contentsline {subsection}{\numberline {3.1.3}Step 3：传递贡献块给父节点}{14}{subsection.3.1.3}%
-\contentsline {subsubsection}{\numberline {3.1.3.1}Step 3.1：子节点传出的内容}{14}{subsubsection.3.1.3.1}%
+\contentsline {subsection}{\numberline {3.1.3}Step 3：传递贡献块给父节点}{13}{subsection.3.1.3}%
+\contentsline {subsubsection}{\numberline {3.1.3.1}Step 3.1：子节点传出的内容}{13}{subsubsection.3.1.3.1}%
 \contentsline {subsubsection}{\numberline {3.1.3.2}Step 3.2：父节点建立新的索引集}{14}{subsubsection.3.1.3.2}%
-\contentsline {subsubsection}{\numberline {3.1.3.3}Step 3.3：建立局部映射并累加数值}{15}{subsubsection.3.1.3.3}%
+\contentsline {subsubsection}{\numberline {3.1.3.3}Step 3.3：建立局部映射并累加数值}{14}{subsubsection.3.1.3.3}%
 \contentsline {subsubsection}{\numberline {3.1.3.4}Step 3.4：组装后的分区与继续传递}{15}{subsubsection.3.1.3.4}%
 \contentsline {section}{\numberline {3.2}对称稠密矩阵的 Bunch--Kaufman 方法}{15}{section.3.2}%
 \contentsline {subsection}{\numberline {3.2.1}对称 Step 1：分解 Fully Summed 块}{16}{subsection.3.2.1}%
 \contentsline {subsubsection}{\numberline {3.2.1.1}Step 1.1：Bunch--Kaufman 主元搜索}{16}{subsubsection.3.2.1.1}%
 \contentsline {subsubsection}{\numberline {3.2.1.2}Step 1.2：对称置换}{17}{subsubsection.3.2.1.2}%
-\contentsline {subsubsection}{\numberline {3.2.1.3}Step 1.3：检查二阶主元的稳定性}{18}{subsubsection.3.2.1.3}%
+\contentsline {subsubsection}{\numberline {3.2.1.3}Step 1.3：检查二阶主元的稳定性}{17}{subsubsection.3.2.1.3}%
 \contentsline {subsubsection}{\numberline {3.2.1.4}Step 1.4：计算 $L$ 并更新活动子块}{18}{subsubsection.3.2.1.4}%
 \contentsline {subsection}{\numberline {3.2.2}块分解优化}{19}{subsection.3.2.2}%
-\contentsline {chapter}{\numberline {第四章\hspace {.3em}}Model 2}{23}{chapter.4}%
-\contentsline {chapter}{\numberline {第五章\hspace {.3em}}Model 3}{25}{chapter.5}%
-\contentsline {chapter}{\numberline {第六章\hspace {.3em}}总结和展望}{27}{chapter.6}%
-\contentsline {chapter}{参考文献}{29}{appendix*.17}%
-\contentsline {chapter}{攻读硕士期间发表的论文及其他成果}{31}{appendix*.18}%
-\contentsline {chapter}{致谢}{33}{appendix*.19}%
-\contentsline {chapter}{北京大学学位论文原创性声明和使用授权说明}{35}{appendix*.20}%
+\contentsline {chapter}{\numberline {第四章\hspace {.3em}}Model 2}{21}{chapter.4}%
+\contentsline {chapter}{\numberline {第五章\hspace {.3em}}Model 3}{23}{chapter.5}%
+\contentsline {chapter}{\numberline {第六章\hspace {.3em}}总结和展望}{25}{chapter.6}%
+\contentsline {chapter}{攻读硕士期间发表的论文及其他成果}{27}{appendix*.17}%
+\contentsline {chapter}{致谢}{29}{appendix*.18}%
+\contentsline {chapter}{北京大学学位论文原创性声明和使用授权说明}{31}{appendix*.19}%
 \contentsfinish 
