@@ -252,6 +252,37 @@ int main()
               << gpu_statistics.tree_waves << '\n';
     std::cout << "Maximum input asymmetry = "
               << gpu_statistics.maximum_input_asymmetry << '\n';
+    std::cout << "Sorted unique CSC fast path = "
+              << (gpu_statistics.sorted_csc_fast_path ? "enabled" : "fallback")
+              << '\n';
+    std::cout << "CUDA asynchronous memory pool = "
+              << (gpu_statistics.asynchronous_memory_pool ? "enabled" : "fallback")
+              << '\n';
+    std::cout << "Input preprocessing and upload time (ms) = "
+              << gpu_statistics.input_preprocessing_milliseconds << '\n';
+    std::cout << "Front assembly enqueue time (ms) = "
+              << gpu_statistics.front_assembly_milliseconds << '\n';
+    std::cout << "Contribution release/barrier time (ms) = "
+              << gpu_statistics.contribution_release_milliseconds << '\n';
+    std::cout << "Single/small/medium factor time (ms) = "
+              << gpu_statistics.small_medium_factorization_milliseconds << '\n';
+    std::cout << "Large panel factor time (ms) = "
+              << gpu_statistics.large_panel_factorization_milliseconds << '\n';
+    std::cout << "Factor save/contribution extraction time (ms) = "
+              << gpu_statistics.factor_finalization_milliseconds << '\n';
+    const float timed_stage_total =
+        gpu_statistics.input_preprocessing_milliseconds +
+        gpu_statistics.front_assembly_milliseconds +
+        gpu_statistics.contribution_release_milliseconds +
+        gpu_statistics.small_medium_factorization_milliseconds +
+        gpu_statistics.large_panel_factorization_milliseconds +
+        gpu_statistics.factor_finalization_milliseconds;
+    std::cout << "Timed stage total (ms) = " << timed_stage_total << '\n';
+    std::cout << "Unattributed scheduling time (ms) = "
+              << std::max(
+                     0.0f,
+                     gpu_statistics.factorization_milliseconds - timed_stage_total)
+              << '\n';
     std::cout << "GPU factorization time (ms) = "
               << gpu_statistics.factorization_milliseconds << '\n';
     std::cout << "GPU LDLT status = " << gpu_factor.diagnostic() << '\n';

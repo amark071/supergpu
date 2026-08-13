@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -31,6 +32,49 @@ void checkCublas(cublasStatus_t status, const char* operation)
         message << operation << ": cuBLAS status " << static_cast<int>(status);
         throw std::runtime_error(message.str());
     }
+}
+
+typedef std::chrono::steady_clock HostClock;
+
+float elapsedMilliseconds(
+    const HostClock::time_point& begin,
+    const HostClock::time_point& end)
+{
+    return std::chrono::duration<float, std::milli>(end - begin).count();
+}
+
+bool asynchronousMemoryPoolEnabled()
+{
+#if CUDART_VERSION >= 11020
+    static const bool enabled = []() {
+        int device = 0;
+        int supported = 0;
+        if (cudaGetDevice(&device) != cudaSuccess ||
+            cudaDeviceGetAttribute(
+                &supported, cudaDevAttrMemoryPoolsSupported, device) != cudaSuccess ||
+            supported == 0) {
+            cudaGetLastError();
+            return false;
+        }
+        cudaMemPool_t pool = 0;
+        if (cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        std::uint64_t release_threshold =
+            std::numeric_limits<std::uint64_t>::max();
+        if (cudaMemPoolSetAttribute(
+                pool, cudaMemPoolAttrReleaseThreshold,
+                &release_threshold) != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        return true;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
 }
 
 template <typename T>
@@ -66,8 +110,19 @@ public:
     {
         reset();
         if (size != 0) {
-            checkCuda(cudaMalloc(reinterpret_cast<void**>(&data_), size * sizeof(T)),
-                      "cudaMalloc");
+#if CUDART_VERSION >= 11020
+            if (asynchronousMemoryPoolEnabled()) {
+                checkCuda(cudaMallocAsync(
+                              reinterpret_cast<void**>(&data_),
+                              size * sizeof(T), 0),
+                          "cudaMallocAsync");
+            } else
+#endif
+            {
+                checkCuda(cudaMalloc(
+                              reinterpret_cast<void**>(&data_), size * sizeof(T)),
+                          "cudaMalloc");
+            }
             size_ = size;
         }
     }
@@ -75,7 +130,14 @@ public:
     void reset() noexcept
     {
         if (data_ != 0) {
-            cudaFree(data_);
+#if CUDART_VERSION >= 11020
+            if (asynchronousMemoryPoolEnabled()) {
+                cudaFreeAsync(data_, 0);
+            } else
+#endif
+            {
+                cudaFree(data_);
+            }
         }
         data_ = 0;
         size_ = 0;
@@ -1029,6 +1091,14 @@ GpuLdltStatistics::GpuLdltStatistics()
       delayed_columns(0),
       unresolved_root_columns(0),
       tree_waves(0),
+      sorted_csc_fast_path(false),
+      asynchronous_memory_pool(false),
+      input_preprocessing_milliseconds(0.0f),
+      front_assembly_milliseconds(0.0f),
+      contribution_release_milliseconds(0.0f),
+      small_medium_factorization_milliseconds(0.0f),
+      large_panel_factorization_milliseconds(0.0f),
+      factor_finalization_milliseconds(0.0f),
       factorization_milliseconds(0.0f),
       maximum_input_asymmetry(0.0f)
 {
@@ -1066,6 +1136,7 @@ public:
         resetNumericState();
         validateInput(n, col_ptr, row_indices, values, symbolic);
         n_ = n;
+        statistics_.asynchronous_memory_pool = asynchronousMemoryPoolEnabled();
         cudaEvent_t start = 0;
         cudaEvent_t stop = 0;
         checkCuda(cudaEventCreate(&start), "cudaEventCreate(start)");
@@ -1074,7 +1145,10 @@ public:
             checkCuda(cudaEventRecord(start), "cudaEventRecord(start)");
 
             prepareTree(symbolic);
+            const HostClock::time_point preprocessing_begin = HostClock::now();
             prepareBaseEntries(n, col_ptr, row_indices, values, symbolic);
+            statistics_.input_preprocessing_milliseconds = elapsedMilliseconds(
+                preprocessing_begin, HostClock::now());
             runTreeWaves(symbolic);
 
             checkCuda(cudaEventRecord(stop), "cudaEventRecord(stop)");
@@ -1321,6 +1395,37 @@ private:
         return (static_cast<std::uint64_t>(high) << 32) | low;
     }
 
+    static bool hasStrictlySortedUniqueRows(
+        int n,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices)
+    {
+        for (int col = 0; col < n; ++col) {
+            for (int p = col_ptr[col] + 1; p < col_ptr[col + 1]; ++p) {
+                if (row_indices[p - 1] >= row_indices[p]) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    static int findSortedCscEntry(
+        int col,
+        int target_row,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices)
+    {
+        const std::vector<int>::const_iterator begin =
+            row_indices.begin() + col_ptr[col];
+        const std::vector<int>::const_iterator end =
+            row_indices.begin() + col_ptr[col + 1];
+        const std::vector<int>::const_iterator position =
+            std::lower_bound(begin, end, target_row);
+        return position != end && *position == target_row
+            ? static_cast<int>(position - row_indices.begin()) : -1;
+    }
+
     void prepareBaseEntries(
         int n,
         const std::vector<int>& col_ptr,
@@ -1328,22 +1433,6 @@ private:
         const std::vector<float>& values,
         const CholmodSymbolicResult& symbolic)
     {
-        std::unordered_map<std::uint64_t, SymmetricAccumulator> entries;
-        entries.reserve(values.size());
-        for (int col = 0; col < n; ++col) {
-            for (int p = col_ptr[col]; p < col_ptr[col + 1]; ++p) {
-                const int row = row_indices[p];
-                SymmetricAccumulator& accumulator = entries[symmetricKey(row, col)];
-                if (row >= col) {
-                    accumulator.lower += values[p];
-                    ++accumulator.lower_count;
-                } else {
-                    accumulator.upper += values[p];
-                    ++accumulator.upper_count;
-                }
-            }
-        }
-
         std::vector<int> column_to_node(static_cast<std::size_t>(n), -1);
         for (std::size_t node = 0; node < nodes_.size(); ++node) {
             for (int col = symbolic.supernode_ptr[node];
@@ -1352,56 +1441,109 @@ private:
             }
         }
 
-        std::vector<std::vector<BaseEntry> > by_owner(nodes_.size());
-        for (std::unordered_map<std::uint64_t, SymmetricAccumulator>::const_iterator
-                 iterator = entries.begin(); iterator != entries.end(); ++iterator) {
-            const int row = static_cast<int>(iterator->first >> 32);
-            const int col = static_cast<int>(iterator->first & 0xffffffffu);
-            const SymmetricAccumulator& accumulator = iterator->second;
-
-            float value = 0.0f;
-            if (row == col) {
-                value = accumulator.lower + accumulator.upper;
-            } else if (accumulator.lower_count != 0 && accumulator.upper_count != 0) {
-                statistics_.maximum_input_asymmetry = std::max(
-                    statistics_.maximum_input_asymmetry,
-                    std::fabs(accumulator.lower - accumulator.upper));
-                value = options_.symmetrize_input
-                    ? 0.5f * (accumulator.lower + accumulator.upper)
-                    : accumulator.lower;
-            } else {
-                value = accumulator.lower_count != 0
-                    ? accumulator.lower : accumulator.upper;
+        std::vector<BaseEntry> entries;
+        entries.reserve((values.size() + static_cast<std::size_t>(n)) / 2);
+        statistics_.sorted_csc_fast_path =
+            hasStrictlySortedUniqueRows(n, col_ptr, row_indices);
+        if (statistics_.sorted_csc_fast_path) {
+            for (int col = 0; col < n; ++col) {
+                for (int p = col_ptr[col]; p < col_ptr[col + 1]; ++p) {
+                    const int row = row_indices[p];
+                    BaseEntry entry;
+                    if (row < col) {
+                        if (findSortedCscEntry(
+                                row, col, col_ptr, row_indices) >= 0) {
+                            continue;
+                        }
+                        entry.row = col;
+                        entry.col = row;
+                        entry.value = values[p];
+                    } else {
+                        entry.row = row;
+                        entry.col = col;
+                        entry.value = values[p];
+                        if (row != col) {
+                            const int upper = findSortedCscEntry(
+                                row, col, col_ptr, row_indices);
+                            if (upper >= 0) {
+                                statistics_.maximum_input_asymmetry = std::max(
+                                    statistics_.maximum_input_asymmetry,
+                                    std::fabs(values[p] - values[upper]));
+                                if (options_.symmetrize_input) {
+                                    entry.value = 0.5f *
+                                        (values[p] + values[upper]);
+                                }
+                            }
+                        }
+                    }
+                    if (entry.value != 0.0f) {
+                        entries.push_back(entry);
+                    }
+                }
             }
-            if (value != 0.0f) {
+        } else {
+            std::unordered_map<std::uint64_t, SymmetricAccumulator> accumulated;
+            accumulated.reserve(values.size());
+            for (int col = 0; col < n; ++col) {
+                for (int p = col_ptr[col]; p < col_ptr[col + 1]; ++p) {
+                    const int row = row_indices[p];
+                    SymmetricAccumulator& accumulator =
+                        accumulated[symmetricKey(row, col)];
+                    if (row >= col) {
+                        accumulator.lower += values[p];
+                        ++accumulator.lower_count;
+                    } else {
+                        accumulator.upper += values[p];
+                        ++accumulator.upper_count;
+                    }
+                }
+            }
+            entries.reserve(accumulated.size());
+            for (std::unordered_map<std::uint64_t, SymmetricAccumulator>::const_iterator
+                     iterator = accumulated.begin();
+                 iterator != accumulated.end(); ++iterator) {
+                const SymmetricAccumulator& accumulator = iterator->second;
                 BaseEntry entry;
-                entry.row = row;
-                entry.col = col;
-                entry.value = value;
-                by_owner[static_cast<std::size_t>(column_to_node[col])].push_back(entry);
+                entry.row = static_cast<int>(iterator->first >> 32);
+                entry.col = static_cast<int>(iterator->first & 0xffffffffu);
+                if (entry.row == entry.col) {
+                    entry.value = accumulator.lower + accumulator.upper;
+                } else if (accumulator.lower_count != 0 &&
+                           accumulator.upper_count != 0) {
+                    statistics_.maximum_input_asymmetry = std::max(
+                        statistics_.maximum_input_asymmetry,
+                        std::fabs(accumulator.lower - accumulator.upper));
+                    entry.value = options_.symmetrize_input
+                        ? 0.5f * (accumulator.lower + accumulator.upper)
+                        : accumulator.lower;
+                } else {
+                    entry.value = accumulator.lower_count != 0
+                        ? accumulator.lower : accumulator.upper;
+                }
+                if (entry.value != 0.0f) {
+                    entries.push_back(entry);
+                }
             }
         }
 
         base_owner_ptr_.assign(nodes_.size() + 1, 0);
-        std::vector<int> host_rows;
-        std::vector<int> host_cols;
-        std::vector<float> host_values;
-        host_rows.reserve(entries.size());
-        host_cols.reserve(entries.size());
-        host_values.reserve(entries.size());
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const int owner = column_to_node[entries[i].col];
+            ++base_owner_ptr_[static_cast<std::size_t>(owner + 1)];
+        }
         for (std::size_t node = 0; node < nodes_.size(); ++node) {
-            std::vector<BaseEntry>& owned = by_owner[node];
-            std::sort(owned.begin(), owned.end(),
-                      [](const BaseEntry& lhs, const BaseEntry& rhs) {
-                          return lhs.col < rhs.col ||
-                                 (lhs.col == rhs.col && lhs.row < rhs.row);
-                      });
-            for (std::size_t i = 0; i < owned.size(); ++i) {
-                host_rows.push_back(owned[i].row);
-                host_cols.push_back(owned[i].col);
-                host_values.push_back(owned[i].value);
-            }
-            base_owner_ptr_[node + 1] = static_cast<int>(host_rows.size());
+            base_owner_ptr_[node + 1] += base_owner_ptr_[node];
+        }
+        std::vector<int> owner_cursor = base_owner_ptr_;
+        std::vector<int> host_rows(entries.size());
+        std::vector<int> host_cols(entries.size());
+        std::vector<float> host_values(entries.size());
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const int owner = column_to_node[entries[i].col];
+            const int destination = owner_cursor[static_cast<std::size_t>(owner)]++;
+            host_rows[static_cast<std::size_t>(destination)] = entries[i].row;
+            host_cols[static_cast<std::size_t>(destination)] = entries[i].col;
+            host_values[static_cast<std::size_t>(destination)] = entries[i].value;
         }
 
         base_rows_.allocate(host_rows.size());
@@ -1806,10 +1948,17 @@ private:
                     wave.begin() + batch_begin, wave.begin() + batch_end);
                 std::vector<FrontWork> fronts;
                 fronts.reserve(batch_nodes.size());
+                const HostClock::time_point assembly_begin = HostClock::now();
                 for (std::size_t i = 0; i < batch_nodes.size(); ++i) {
                     fronts.push_back(assembleFront(batch_nodes[i], symbolic));
                 }
+                statistics_.front_assembly_milliseconds += elapsedMilliseconds(
+                    assembly_begin, HostClock::now());
+
+                const HostClock::time_point release_begin = HostClock::now();
                 releaseConsumedChildContributions(batch_nodes);
+                statistics_.contribution_release_milliseconds += elapsedMilliseconds(
+                    release_begin, HostClock::now());
 
                 std::vector<int> singles;
                 std::vector<int> medium;
@@ -1831,16 +1980,26 @@ private:
                     }
                 }
 
+                const HostClock::time_point small_medium_begin = HostClock::now();
                 factorBatch(fronts, singles, true);
                 factorBatch(fronts, medium, false);
+                statistics_.small_medium_factorization_milliseconds +=
+                    elapsedMilliseconds(small_medium_begin, HostClock::now());
+
+                const HostClock::time_point large_begin = HostClock::now();
                 for (std::size_t i = 0; i < large.size(); ++i) {
                     factorLarge(fronts[large[i]]);
                 }
+                statistics_.large_panel_factorization_milliseconds +=
+                    elapsedMilliseconds(large_begin, HostClock::now());
 
+                const HostClock::time_point finalization_begin = HostClock::now();
                 for (std::size_t i = 0; i < fronts.size(); ++i) {
                     finalizeFront(fronts[i]);
                     ++processed;
                 }
+                statistics_.factor_finalization_milliseconds +=
+                    elapsedMilliseconds(finalization_begin, HostClock::now());
             }
 
             for (std::size_t i = 0; i < wave.size(); ++i) {

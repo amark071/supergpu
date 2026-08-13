@@ -53,6 +53,23 @@ struct GpuLdltStatistics {
     std::size_t delayed_columns;
     std::size_t unresolved_root_columns;
     std::size_t tree_waves;
+
+    // 输入每列严格有序且无重复时，数值对称化跳过 unordered_map。
+    bool sorted_csc_fast_path;
+
+    // CUDA 11.2+ 且设备支持时，临时/因子缓冲区使用默认异步内存池。
+    bool asynchronous_memory_pool;
+
+    // 以下分项是宿主端经过时间；异步 front kernel 的完成时间通常记在
+    // contribution_release_milliseconds 对应的批次屏障中。
+    float input_preprocessing_milliseconds;
+    float front_assembly_milliseconds;
+    float contribution_release_milliseconds;
+    float small_medium_factorization_milliseconds;
+    float large_panel_factorization_milliseconds;
+    float factor_finalization_milliseconds;
+
+    // 从 CUDA 起止 event 得到的整个数值分解阶段时间。
     float factorization_milliseconds;
     float maximum_input_asymmetry;
 };
