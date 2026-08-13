@@ -8,6 +8,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 namespace {
 
 void validateMatrixAndPermutation(
@@ -55,13 +59,13 @@ OrderingResult computeBestOrdering(
     result.amd_fill = computeSymbolicFillIn(n, col_ptr, row_indices, amd.iperm);
 
     if (result.amd_fill.fill_entries <= result.metis_fill.fill_entries) {
-        result.perm = amd.perm;
         result.iperm = amd.iperm;
+        result.perm = amd.perm;
         result.method = OrderingMethod::Amd;
         result.selected_fill = result.amd_fill;
     } else {
-        result.perm = metis.perm;
         result.iperm = metis.iperm;
+        result.perm = metis.perm;
         result.method = OrderingMethod::Metis;
         result.selected_fill = result.metis_fill;
     }
@@ -86,7 +90,20 @@ void applySymmetricPermutationCSC(
     validateMatrixAndPermutation(n, col_ptr, row_indices, values, iperm);
 
     typedef std::pair<int, float> Entry;
-    std::vector<std::vector<Entry> > columns(static_cast<std::size_t>(n));
+    ordered_col_ptr.assign(static_cast<std::size_t>(n + 1), 0);
+    for (int old_col = 0; old_col < n; ++old_col) {
+        const int new_col = iperm[static_cast<std::size_t>(old_col)];
+        ordered_col_ptr[static_cast<std::size_t>(new_col + 1)] +=
+            col_ptr[static_cast<std::size_t>(old_col + 1)] -
+            col_ptr[static_cast<std::size_t>(old_col)];
+    }
+    for (int col = 0; col < n; ++col) {
+        ordered_col_ptr[static_cast<std::size_t>(col + 1)] +=
+            ordered_col_ptr[static_cast<std::size_t>(col)];
+    }
+
+    std::vector<Entry> entries(row_indices.size());
+    std::vector<int> next = ordered_col_ptr;
     for (int old_col = 0; old_col < n; ++old_col) {
         const int new_col = iperm[static_cast<std::size_t>(old_col)];
         const int begin = col_ptr[static_cast<std::size_t>(old_col)];
@@ -97,28 +114,34 @@ void applySymmetricPermutationCSC(
                 throw std::invalid_argument("CSC row index is out of range");
             }
             const int new_row = iperm[static_cast<std::size_t>(old_row)];
-            columns[static_cast<std::size_t>(new_col)].push_back(
-                Entry(new_row, values[static_cast<std::size_t>(k)]));
+            entries[static_cast<std::size_t>(
+                next[static_cast<std::size_t>(new_col)]++)] =
+                Entry(new_row, values[static_cast<std::size_t>(k)]);
         }
     }
 
-    ordered_col_ptr.assign(static_cast<std::size_t>(n + 1), 0);
-    ordered_row_indices.clear();
-    ordered_values.clear();
-    ordered_row_indices.reserve(row_indices.size());
-    ordered_values.reserve(values.size());
-
-    for (int col = 0; col < n; ++col) {
-        std::vector<Entry>& entries = columns[static_cast<std::size_t>(col)];
-        std::sort(entries.begin(), entries.end(),
-                  [](const Entry& lhs, const Entry& rhs) {
-                      return lhs.first < rhs.first;
-                  });
-        for (std::size_t i = 0; i < entries.size(); ++i) {
-            ordered_row_indices.push_back(entries[i].first);
-            ordered_values.push_back(entries[i].second);
+    ordered_row_indices.resize(row_indices.size());
+    ordered_values.resize(values.size());
+    const auto sort_column = [&](int col) {
+        const int begin = ordered_col_ptr[static_cast<std::size_t>(col)];
+        const int end = ordered_col_ptr[static_cast<std::size_t>(col + 1)];
+        std::sort(
+            entries.begin() + begin, entries.begin() + end,
+            [](const Entry& lhs, const Entry& rhs) {
+                return lhs.first < rhs.first;
+            });
+        for (int position = begin; position < end; ++position) {
+            ordered_row_indices[static_cast<std::size_t>(position)] =
+                entries[static_cast<std::size_t>(position)].first;
+            ordered_values[static_cast<std::size_t>(position)] =
+                entries[static_cast<std::size_t>(position)].second;
         }
-        ordered_col_ptr[static_cast<std::size_t>(col + 1)] =
-            static_cast<int>(ordered_row_indices.size());
+    };
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 64) if(n >= 1024)
+#endif
+    for (int col = 0; col < n; ++col) {
+        sort_column(col);
     }
 }

@@ -4,12 +4,12 @@
 #include <vector>
 
 struct AmdOrdering {
-    // perm[新下标]=旧下标，iperm[旧下标]=新下标
+    // perm[new] = old, iperm[old] = new.
     std::vector<int> perm;
     std::vector<int> iperm;
 };
 
-/** @brief 使用SuiteSparse AMD计算0-based CSC矩阵的填充减少排列 */
+// Compute a zero-based fill-reducing ordering with SuiteSparse AMD.
 AmdOrdering computeAmdOrdering(
     int n,
     const std::vector<int>& col_ptr,

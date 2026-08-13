@@ -4,6 +4,7 @@ project(supernodal_gpu LANGUAGES CXX CUDA)
 
 find_package(CUDAToolkit REQUIRED)
 find_package(Threads REQUIRED)
+find_package(OpenMP QUIET)
 
 find_path(METIS_INCLUDE_DIR metis.h)
 find_library(METIS_LIBRARY NAMES metis)
@@ -77,6 +78,9 @@ target_include_directories(ordering PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ordering
     PUBLIC metis_ordering amd_ordering symbolic_analysis
 )
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(ordering PUBLIC OpenMP::OpenMP_CXX)
+endif()
 target_compile_features(ordering PUBLIC cxx_std_11)
 
 add_library(cholmod_symbolic STATIC
@@ -178,6 +182,7 @@ add_custom_target(run
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_custom_target(visualize
+        COMMAND $<TARGET_FILE:supernodal_gpu> --export-visualization
         COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/utils/plot_symbolic_analysis.py"
             --input-dir "${SYMBOLIC_VISUALIZATION_DIR}"
@@ -185,7 +190,7 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         USES_TERMINAL
     )
-    add_dependencies(visualize run)
+    add_dependencies(visualize supernodal_gpu)
 else()
     message(WARNING
         "Python 3 was not found; the visualize target will not be available.")

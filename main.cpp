@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -41,6 +43,159 @@ struct ResidualVerification {
     float scaled_backward_error;
     float relative_solution_error;
 };
+
+const std::uint32_t kSymbolicCacheVersion = 1;
+
+std::uint64_t symbolicStructureHash(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices)
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    const std::uint64_t prime = 1099511628211ull;
+    hash = (hash ^ static_cast<std::uint32_t>(n)) * prime;
+    for (std::size_t i = 0; i < col_ptr.size(); ++i) {
+        hash = (hash ^ static_cast<std::uint32_t>(col_ptr[i])) * prime;
+    }
+    for (std::size_t i = 0; i < row_indices.size(); ++i) {
+        hash = (hash ^ static_cast<std::uint32_t>(row_indices[i])) * prime;
+    }
+    return hash;
+}
+
+template <typename T>
+bool readBinary(std::ifstream& input, T& value)
+{
+    input.read(reinterpret_cast<char*>(&value), sizeof(T));
+    return static_cast<bool>(input);
+}
+
+template <typename T>
+void writeBinary(std::ofstream& output, const T& value)
+{
+    output.write(reinterpret_cast<const char*>(&value), sizeof(T));
+}
+
+bool readIntVector(
+    std::ifstream& input,
+    std::vector<int>& values,
+    std::uint64_t maximum_size)
+{
+    std::uint64_t size = 0;
+    if (!readBinary(input, size) || size > maximum_size) {
+        return false;
+    }
+    values.resize(static_cast<std::size_t>(size));
+    if (size != 0) {
+        input.read(
+            reinterpret_cast<char*>(values.data()),
+            static_cast<std::streamsize>(size * sizeof(int)));
+    }
+    return static_cast<bool>(input);
+}
+
+void writeIntVector(std::ofstream& output, const std::vector<int>& values)
+{
+    const std::uint64_t size = static_cast<std::uint64_t>(values.size());
+    writeBinary(output, size);
+    if (!values.empty()) {
+        output.write(
+            reinterpret_cast<const char*>(values.data()),
+            static_cast<std::streamsize>(values.size() * sizeof(int)));
+    }
+}
+
+bool loadSymbolicCache(
+    const std::string& path,
+    int n,
+    std::size_t input_nonzeros,
+    std::uint64_t structure_hash,
+    CholmodSymbolicResult& symbolic)
+{
+    std::ifstream input(path.c_str(), std::ios::binary);
+    if (!input) {
+        return false;
+    }
+
+    char magic[8] = {};
+    input.read(magic, sizeof(magic));
+    std::uint32_t version = 0;
+    std::int32_t cached_n = 0;
+    std::uint64_t cached_nonzeros = 0;
+    std::uint64_t cached_hash = 0;
+    std::uint64_t input_off_diagonal_nonzeros = 0;
+    if (!input || std::memcmp(magic, "SGLDLTSY", 8) != 0 ||
+        !readBinary(input, version) ||
+        !readBinary(input, cached_n) ||
+        !readBinary(input, cached_nonzeros) ||
+        !readBinary(input, cached_hash) ||
+        !readBinary(input, input_off_diagonal_nonzeros) ||
+        version != kSymbolicCacheVersion || cached_n != n ||
+        cached_nonzeros != input_nonzeros || cached_hash != structure_hash) {
+        return false;
+    }
+
+    const std::uint64_t n_size = static_cast<std::uint64_t>(n);
+    const std::uint64_t maximum_factor_entries =
+        n_size * (n_size + 1) / 2;
+    if (!readIntVector(input, symbolic.perm, n_size) ||
+        !readIntVector(input, symbolic.iperm, n_size) ||
+        !readIntVector(input, symbolic.column_parent, n_size) ||
+        !readIntVector(input, symbolic.column_count, n_size) ||
+        !readIntVector(input, symbolic.supernode_ptr, n_size + 1) ||
+        !readIntVector(input, symbolic.supernode_parent, n_size) ||
+        !readIntVector(input, symbolic.row_ptr, n_size + 1) ||
+        !readIntVector(
+            input, symbolic.supernode_rows, maximum_factor_entries)) {
+        return false;
+    }
+    symbolic.input_off_diagonal_nonzeros =
+        static_cast<std::size_t>(input_off_diagonal_nonzeros);
+    return symbolic.perm.size() == n_size &&
+        symbolic.iperm.size() == n_size &&
+        symbolic.column_parent.size() == n_size &&
+        symbolic.column_count.size() == n_size &&
+        !symbolic.supernode_ptr.empty() &&
+        symbolic.supernode_ptr.front() == 0 &&
+        symbolic.supernode_ptr.back() == n &&
+        symbolic.supernode_parent.size() + 1 ==
+            symbolic.supernode_ptr.size() &&
+        symbolic.row_ptr.size() == symbolic.supernode_ptr.size() &&
+        !symbolic.row_ptr.empty() && symbolic.row_ptr.front() == 0 &&
+        symbolic.row_ptr.back() ==
+            static_cast<int>(symbolic.supernode_rows.size());
+}
+
+void saveSymbolicCache(
+    const std::string& path,
+    int n,
+    std::size_t input_nonzeros,
+    std::uint64_t structure_hash,
+    const CholmodSymbolicResult& symbolic)
+{
+    std::ofstream output(path.c_str(), std::ios::binary | std::ios::trunc);
+    if (!output) {
+        std::cerr << "Warning: could not create symbolic cache: "
+                  << path << '\n';
+        return;
+    }
+    output.write("SGLDLTSY", 8);
+    writeBinary(output, kSymbolicCacheVersion);
+    writeBinary(output, static_cast<std::int32_t>(n));
+    writeBinary(output, static_cast<std::uint64_t>(input_nonzeros));
+    writeBinary(output, structure_hash);
+    writeBinary(
+        output,
+        static_cast<std::uint64_t>(symbolic.input_off_diagonal_nonzeros));
+    writeIntVector(output, symbolic.perm);
+    writeIntVector(output, symbolic.iperm);
+    writeIntVector(output, symbolic.column_parent);
+    writeIntVector(output, symbolic.column_count);
+    writeIntVector(output, symbolic.supernode_ptr);
+    writeIntVector(output, symbolic.supernode_parent);
+    writeIntVector(output, symbolic.row_ptr);
+    writeIntVector(output, symbolic.supernode_rows);
+}
 
 std::uint64_t symmetricKey(int row, int col)
 {
@@ -190,8 +345,30 @@ ResidualVerification verifySolution(
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    bool compare_orderings = false;
+    bool export_ordered_matrix = false;
+    bool export_visualization = false;
+    bool rebuild_symbolic_cache = false;
+    bool no_symbolic_cache = false;
+    for (int argument = 1; argument < argc; ++argument) {
+        const std::string option(argv[argument]);
+        if (option == "--compare-orderings") {
+            compare_orderings = true;
+        } else if (option == "--export-ordered-matrix") {
+            export_ordered_matrix = true;
+        } else if (option == "--export-visualization") {
+            export_visualization = true;
+        } else if (option == "--rebuild-symbolic-cache") {
+            rebuild_symbolic_cache = true;
+        } else if (option == "--no-symbolic-cache") {
+            no_symbolic_cache = true;
+        } else {
+            std::cerr << "Unknown option: " << option << '\n';
+            return 1;
+        }
+    }
     // 读入后，矩阵在内存中统一使用0-based CSC格式。
     std::vector<int> A_rows;
     std::vector<int> A_cols;
@@ -200,28 +377,146 @@ int main()
     readCSCMatrix("data/A_1215.dat", A_n, A_nnz, A_rows, A_cols, A_val);
 
     // 分别测试METIS和AMD，选择符号填充元更少的排列。
-    const OrderingResult ordering = computeBestOrdering(A_n, A_cols, A_rows);
+    const std::chrono::steady_clock::time_point symbolic_start =
+        std::chrono::steady_clock::now();
+    OrderingResult ordering;
+    CholmodSymbolicResult symbolic;
+    float ordering_comparison_milliseconds = 0.0f;
+    float cholmod_analysis_milliseconds = 0.0f;
+    float permutation_milliseconds = 0.0f;
+    std::string selected_ordering_method;
+    std::size_t selected_factor_nonzeros = 0;
+    std::size_t selected_fill_entries = 0;
+    double selected_fill_ratio = 1.0;
+    bool symbolic_cache_hit = false;
+
+    if (compare_orderings) {
+        const std::chrono::steady_clock::time_point ordering_start =
+            std::chrono::steady_clock::now();
+        ordering = computeBestOrdering(A_n, A_cols, A_rows);
+        ordering_comparison_milliseconds =
+            std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - ordering_start).count();
+        selected_ordering_method = orderingMethodName(ordering.method);
+        selected_factor_nonzeros = ordering.selected_fill.factor_nonzeros;
+        selected_fill_entries = ordering.selected_fill.fill_entries;
+        selected_fill_ratio = ordering.selected_fill.fill_ratio;
+    } else {
+        const std::string cache_path = "symbolic_analysis.cache";
+        const std::uint64_t structure_hash = symbolicStructureHash(
+            A_n, A_cols, A_rows);
+        symbolic_cache_hit = !rebuild_symbolic_cache && !no_symbolic_cache &&
+            loadSymbolicCache(
+            cache_path, A_n, A_rows.size(), structure_hash, symbolic);
+        if (!symbolic_cache_hit) {
+            const std::chrono::steady_clock::time_point analysis_start =
+                std::chrono::steady_clock::now();
+            symbolic = analyzeAndOrderBasicSupernodesWithCholmod(
+                A_n, A_cols, A_rows);
+            cholmod_analysis_milliseconds =
+                std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - analysis_start).count();
+            if (!no_symbolic_cache) {
+                saveSymbolicCache(
+                    cache_path, A_n, A_rows.size(), structure_hash, symbolic);
+            }
+        }
+        ordering.perm = symbolic.perm;
+        ordering.iperm = symbolic.iperm;
+        ordering.method = OrderingMethod::Metis;
+        selected_ordering_method = "CHOLMOD-METIS fast path";
+        for (std::size_t column = 0;
+             column < symbolic.column_count.size(); ++column) {
+            selected_factor_nonzeros +=
+                static_cast<std::size_t>(symbolic.column_count[column]);
+        }
+        const std::size_t original_triangular_nonzeros =
+            static_cast<std::size_t>(A_n) +
+            symbolic.input_off_diagonal_nonzeros;
+        selected_fill_entries = selected_factor_nonzeros >=
+                original_triangular_nonzeros
+            ? selected_factor_nonzeros - original_triangular_nonzeros : 0;
+        selected_fill_ratio = original_triangular_nonzeros == 0
+            ? 1.0 : static_cast<double>(selected_factor_nonzeros) /
+                static_cast<double>(original_triangular_nonzeros);
+    }
 
     std::vector<int> ordered_rows;
     std::vector<int> ordered_cols;
     std::vector<float> ordered_values;
+    const std::chrono::steady_clock::time_point permutation_start =
+        std::chrono::steady_clock::now();
     applySymmetricPermutationCSC(A_n, A_cols, A_rows, A_val, ordering.iperm, ordered_cols, ordered_rows, ordered_values);
+    permutation_milliseconds =
+        std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - permutation_start).count();
 
-    writeCSCMatrix("data/A_1215_ordered.dat", A_n, ordered_rows, ordered_cols, ordered_values);
+    if (compare_orderings) {
+        const std::chrono::steady_clock::time_point analysis_start =
+            std::chrono::steady_clock::now();
+        symbolic = analyzeBasicSupernodesWithCholmod(
+            A_n, ordered_cols, ordered_rows);
+        cholmod_analysis_milliseconds =
+            std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - analysis_start).count();
+    }
+    const float symbolic_pipeline_milliseconds =
+        std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - symbolic_start).count();
+
+    if (export_ordered_matrix) {
+        writeCSCMatrix(
+            "data/A_1215_ordered.dat", A_n,
+            ordered_rows, ordered_cols, ordered_values);
+    }
     std::cout << "Loaded " << A_val.size() << " nonzero entries" << '\n';
     std::cout << A_n << "x" << A_n << ", nonzero = " << A_nnz << '\n';
-    std::cout << "METIS symbolic fill-in = " << ordering.metis_fill.fill_entries << ", ratio = " << ordering.metis_fill.fill_ratio << '\n';
-    std::cout << "AMD symbolic fill-in = " << ordering.amd_fill.fill_entries << ", ratio = " << ordering.amd_fill.fill_ratio << '\n';
-    std::cout << "Selected ordering method = " << orderingMethodName(ordering.method) << '\n';
-    std::cout << "Selected symbolic factor L nonzeros = "<< ordering.selected_fill.factor_nonzeros << '\n';
+    if (compare_orderings) {
+        std::cout << "METIS symbolic fill-in = "
+                  << ordering.metis_fill.fill_entries << ", ratio = "
+                  << ordering.metis_fill.fill_ratio << '\n';
+        std::cout << "AMD symbolic fill-in = "
+                  << ordering.amd_fill.fill_entries << ", ratio = "
+                  << ordering.amd_fill.fill_ratio << '\n';
+    } else {
+        std::cout << "METIS symbolic fill-in = " << selected_fill_entries
+                  << ", ratio = " << selected_fill_ratio << '\n';
+        std::cout << "AMD symbolic fill-in = skipped (use --compare-orderings)\n";
+    }
+    std::cout << "Selected ordering method = "
+              << selected_ordering_method << '\n';
+    std::cout << "Selected symbolic factor L nonzeros = "
+              << selected_factor_nonzeros << '\n';
     std::cout << "Reordered nonzeros = " << ordered_values.size() << '\n';
+    std::cout << "Ordering comparison time (ms) = "
+              << ordering_comparison_milliseconds << '\n';
+    std::cout << "Symbolic cache = "
+              << (compare_orderings
+                      ? "disabled in comparison mode"
+                      : (no_symbolic_cache
+                          ? "disabled by --no-symbolic-cache"
+                          : (symbolic_cache_hit
+                              ? "hit" : "miss; cache updated")))
+              << '\n';
+    std::cout << "CHOLMOD ordering and symbolic analysis time (ms) = "
+              << cholmod_analysis_milliseconds << '\n';
+    std::cout << "Symmetric CSC permutation time (ms) = "
+              << permutation_milliseconds << '\n';
+    std::cout << "Symbolic pipeline including permutation time (ms) = "
+              << symbolic_pipeline_milliseconds << '\n';
 
     // 符号分析
-    const CholmodSymbolicResult symbolic = analyzeBasicSupernodesWithCholmod(A_n, ordered_cols, ordered_rows);
-    writeSymbolicVisualizationData(SUPERNODAL_VISUALIZATION_DIR, A_n, symbolic);
+    if (export_visualization) {
+        writeSymbolicVisualizationData(
+            SUPERNODAL_VISUALIZATION_DIR, A_n, symbolic);
+    }
     std::cout << "Elimination tree columns = " << symbolic.column_parent.size() << '\n';
     std::cout << "Basic supernodes = " << symbolic.supernode_parent.size() << '\n';
-    std::cout << "Visualization data = " << SUPERNODAL_VISUALIZATION_DIR << '\n';
+    std::cout << "Visualization data = "
+              << (export_visualization
+                      ? SUPERNODAL_VISUALIZATION_DIR
+                      : "disabled (use --export-visualization)")
+              << '\n';
 
     // 数值分解：节点分类依据实际候选宽度（包含子节点上传的延迟列）。
     // 1 列节点与 2--64 列节点分别批处理；更大的节点使用 64 列 BK panel。
