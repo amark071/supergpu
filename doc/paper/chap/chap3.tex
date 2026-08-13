@@ -95,41 +95,30 @@ LAPACK 的 \code{dgetrf} 函数在大量的求解器中担负这个责任,
   \item 如果不能选到合适的列主元，则在整个活动子块中选择主元（即待更新的子块中最大的元素）：此时需要同时进行行、列交换，将活动子块的全局最大元素置换到当前主元位置，根据该主元计算 $L_p$，再更新 $U_p$ 和右下角子块。
 \end{enumerate}
 
-\subsubsection{列主元接受阈值}
+\subsubsection{主元接受阈值}
 
 设第 $k$ 步尚未分解的活动子块为
 $S^{(k)}=\left[s_{ij}^{(k)}\right]_{i,j=k}^{f}$，
 其中 $f$ 为 Fully Summed 块的阶数，$\tau\in(0,1)$ 为主元接受阈值。
-
-列主元只搜索活动子块的第 $k$ 列，候选主元所在行为
+列主元只搜索活动子块第 $k$ 列，候选主元所在行为
 $$p_k=\underset{k\le i\le f}{\operatorname{argmax}}
       \left|s_{ik}^{(k)}\right|,
 \qquad
 \alpha_k=\left|s_{p_k k}^{(k)}\right|.$$
-记活动子块中的最大元素为
+\qquad 记活动子块中的最大元素为
 $\beta_k=\left\|S^{(k)}\right\|_{\max}
 =\max_{k\le i,j\le f}\left|s_{ij}^{(k)}\right|$，
 当
 $\alpha_k\ge\tau\beta_k$
 时，认为列主元足够稳定。用行置换矩阵 $P_k$ 交换第 $k$ 行和第 $p_k$ 行：
-
-\[
-\widetilde S^{(k)}=P_kS^{(k)},
+$$\widetilde S^{(k)}=P_kS^{(k)},
 \qquad
-d_k=\widetilde s_{kk}^{(k)}=s_{p_k k}^{(k)}.
-\]
-
-这里 $\alpha_k$ 是当前列能够选到的最大主元，$\beta_k$ 是整个活动子块的最大元素；$\tau$ 决定当前列的最大元素相对于活动子块整体尺度需要达到多大比例才可接受。
-
-\subsubsection{全主元搜索}
+d_k=\widetilde s_{kk}^{(k)}=s_{p_k k}^{(k)}.$$
+\qquad 这里 $\alpha_k$ 是当前列能够选到的最大主元，$\beta_k$ 是整个活动子块的最大元素；$\tau$ 决定当前列的最大元素相对于活动子块整体尺度需要达到多大比例才可接受。
 
 若
-
-\[
-\alpha_k<\tau\beta_k,
-\]
-
-则在整个活动子块中搜索最大元素：
+$\alpha_k<\tau\beta_k$
+，则在整个活动子块中搜索最大元素：
 
 \[
 (p_k,q_k)=\underset{k\le i,j\le f}{\operatorname{argmax}}

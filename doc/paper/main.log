@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2024.7.18)  13 AUG 2026 11:29
+This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2024.7.18)  13 AUG 2026 11:38
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -1813,75 +1813,82 @@ File: img/pku-text-logo.png Graphic file (type bmp)
 
 ]
 第三章
-[9] [10] [11] [12]
+[9] [10] [11]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 266.
-
-
-Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `subscript' on input line 266.
+(hyperref)                removing `math shift' on input line 255.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 266.
+(hyperref)                removing `subscript' on input line 255.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 266.
+(hyperref)                removing `math shift' on input line 255.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `subscript' on input line 266.
+(hyperref)                removing `math shift' on input line 255.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 266.
+(hyperref)                removing `subscript' on input line 255.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 276.
+(hyperref)                removing `math shift' on input line 255.
+
+
+Underfull \vbox (badness 1286) has occurred while \output is active []
+
+ [12]
+
+Package hyperref Warning: Token not allowed in a PDF string (Unicode):
+(hyperref)                removing `math shift' on input line 265.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `subscript' on input line 276.
+(hyperref)                removing `subscript' on input line 265.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 276.
+(hyperref)                removing `math shift' on input line 265.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 276.
+(hyperref)                removing `math shift' on input line 265.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `subscript' on input line 276.
+(hyperref)                removing `subscript' on input line 265.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 276.
+(hyperref)                removing `math shift' on input line 265.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 286.
+(hyperref)                removing `math shift' on input line 275.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `subscript' on input line 286.
+(hyperref)                removing `subscript' on input line 275.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 286.
+(hyperref)                removing `math shift' on input line 275.
 
-[13] [14] [15] [16] [17]
+[13]
+Underfull \vbox (badness 1024) has occurred while \output is active []
+
+ [14] [15] [16] [17]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 584.
+(hyperref)                removing `math shift' on input line 573.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 584.
+(hyperref)                removing `math shift' on input line 573.
 
 [18] [19] [20]) [21]
 \openout2 = `chap/chap4.aux'.
@@ -1968,7 +1975,7 @@ LaTeX Font Warning: Size substitutions with differences
 (Font)              up to 1.22pt have occurred.
 
 Package rerunfilecheck Info: File `main.out' has not changed.
-(rerunfilecheck)             Checksum: C024F38AB4673330AD6F0049AFF375B8;8340.
+(rerunfilecheck)             Checksum: 37F5D4C59EDDD068C567F0B91560FB34;8177.
 Package logreq Info: Writing requests to 'main.run.xml'.
 \openout1 = `main.run.xml'.
 
@@ -1976,7 +1983,7 @@ Package logreq Info: Writing requests to 'main.run.xml'.
 Here is how much of TeX's memory you used:
  46751 strings out of 476720
  969245 string characters out of 5801444
- 2011586 words of memory out of 5000000
+ 2011419 words of memory out of 5000000
  67954 multiletter control sequences out of 15000+600000
  569582 words of font info for 184 fonts, out of 8000000 for 9000
  36 hyphenation exceptions out of 8191

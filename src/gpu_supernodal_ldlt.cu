@@ -164,6 +164,47 @@ private:
     cudaStream_t stream_;
 };
 
+template <typename T>
+class ReusablePinnedBuffer {
+public:
+    ReusablePinnedBuffer() : data_(0), capacity_(0) {}
+    ~ReusablePinnedBuffer()
+    {
+        if (data_ != 0) {
+            cudaFreeHost(data_);
+        }
+    }
+
+    ReusablePinnedBuffer(const ReusablePinnedBuffer&) = delete;
+    ReusablePinnedBuffer& operator=(const ReusablePinnedBuffer&) = delete;
+
+    void reserve(std::size_t capacity)
+    {
+        if (capacity <= capacity_) {
+            return;
+        }
+        T* replacement = 0;
+        checkCuda(cudaMallocHost(
+                      reinterpret_cast<void**>(&replacement),
+                      capacity * sizeof(T)),
+                  "cudaMallocHost(reusable upload buffer)");
+        if (data_ != 0) {
+            checkCuda(cudaFreeHost(data_),
+                      "cudaFreeHost(reusable upload buffer)");
+        }
+        data_ = replacement;
+        capacity_ = capacity;
+    }
+
+    T* get() { return data_; }
+    const T* get() const { return data_; }
+    T& operator[](std::size_t index) { return data_[index]; }
+
+private:
+    T* data_;
+    std::size_t capacity_;
+};
+
 struct DeviceFrontDescriptor {
     float* values;
     int* ids;
@@ -1333,7 +1374,9 @@ private:
     struct FrontWork {
         FrontWork()
             : node(-1), order(0), candidate_count(0), accepted(0), delayed(0),
-              one_by_one(0), two_by_two(0), classification(GpuSupernodeClass::SingleColumn)
+              one_by_one(0), two_by_two(0), classification(GpuSupernodeClass::SingleColumn),
+              values_offset(0), ids_offset(0), pivot_offset(0),
+              values(0), ids(0), pivot_size(0)
         {
         }
 
@@ -1346,6 +1389,15 @@ private:
         int two_by_two;
         GpuSupernodeClass classification;
         std::vector<int> ids_host;
+        std::size_t values_offset;
+        std::size_t ids_offset;
+        std::size_t pivot_offset;
+        float* values;
+        int* ids;
+        int* pivot_size;
+    };
+
+    struct FrontBatchStorage {
         DeviceBuffer<float> values;
         DeviceBuffer<int> ids;
         DeviceBuffer<int> pivot_size;
@@ -1670,7 +1722,7 @@ private:
         }
     }
 
-    FrontWork assembleFront(int node_index, const CholmodSymbolicResult& symbolic)
+    FrontWork prepareFront(int node_index, const CholmodSymbolicResult& symbolic)
     {
         FrontWork front;
         front.node = node_index;
@@ -1714,33 +1766,24 @@ private:
             front.classification = GpuSupernodeClass::LargePanel;
         }
 
-        front.values.allocate(
-            static_cast<std::size_t>(front.order) * static_cast<std::size_t>(front.order));
-        front.ids.allocate(front.ids_host.size());
-        front.pivot_size.allocate(static_cast<std::size_t>(front.candidate_count));
-        checkCuda(cudaMemsetAsync(
-                      front.values.get(), 0,
-                      static_cast<std::size_t>(front.order) * front.order * sizeof(float), 0),
-                  "clear frontal matrix");
-        checkCuda(cudaMemsetAsync(
-                      front.pivot_size.get(), 0,
-                      static_cast<std::size_t>(front.candidate_count) * sizeof(int), 0),
-                  "clear pivot block sizes");
-        checkCuda(cudaMemcpyAsync(
-                      front.ids.get(), front.ids_host.data(),
-                      front.ids_host.size() * sizeof(int), cudaMemcpyHostToDevice, 0),
-                  "upload front IDs");
+        return front;
+    }
+
+    void assembleFront(FrontWork& front)
+    {
+        const std::size_t node = static_cast<std::size_t>(front.node);
+        NodeData& node_data = nodes_[node];
 
         const int position_blocks = (front.order + 255) / 256;
         setFrontPositionsKernel<<<position_blocks, 256>>>(
-            front.ids.get(), front.order, global_to_local_.get());
+            front.ids, front.order, global_to_local_.get());
 
         const int base_begin = base_owner_ptr_[node];
         const int base_end = base_owner_ptr_[node + 1];
         if (base_begin != base_end) {
             const int blocks = (base_end - base_begin + 255) / 256;
             scatterBaseEntriesKernel<<<blocks, 256>>>(
-                front.values.get(), front.order,
+                front.values, front.order,
                 global_to_local_.get(),
                 base_rows_.get(), base_cols_.get(), base_values_.get(),
                 base_begin, base_end);
@@ -1754,23 +1797,68 @@ private:
             }
             const int total = child.contribution_order * child.contribution_order;
             extendAddKernel<<<(total + 255) / 256, 256>>>(
-                front.values.get(), front.order,
+                front.values, front.order,
                 global_to_local_.get(),
                 child.contribution_values.get(), child.contribution_ids.get(),
                 child.contribution_order);
         }
         clearFrontPositionsKernel<<<position_blocks, 256>>>(
-            front.ids.get(), front.order, global_to_local_.get());
+            front.ids, front.order, global_to_local_.get());
         checkCuda(cudaGetLastError(), "assemble frontal matrix on GPU");
-        return front;
+    }
+
+    FrontBatchStorage materializeFrontBatch(std::vector<FrontWork>& fronts)
+    {
+        FrontBatchStorage storage;
+        std::size_t value_count = 0;
+        std::size_t id_count = 0;
+        std::size_t pivot_count = 0;
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            fronts[i].values_offset = value_count;
+            fronts[i].ids_offset = id_count;
+            fronts[i].pivot_offset = pivot_count;
+            value_count += static_cast<std::size_t>(fronts[i].order) *
+                static_cast<std::size_t>(fronts[i].order);
+            id_count += static_cast<std::size_t>(fronts[i].order);
+            pivot_count += static_cast<std::size_t>(fronts[i].candidate_count);
+        }
+
+        storage.values.allocate(value_count);
+        storage.ids.allocate(id_count);
+        storage.pivot_size.allocate(pivot_count);
+        checkCuda(cudaMemsetAsync(
+                      storage.values.get(), 0, value_count * sizeof(float), 0),
+                  "clear batched frontal matrices");
+        checkCuda(cudaMemsetAsync(
+                      storage.pivot_size.get(), 0, pivot_count * sizeof(int), 0),
+                  "clear batched pivot block sizes");
+
+        front_ids_upload_.reserve(id_count);
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            std::copy(fronts[i].ids_host.begin(), fronts[i].ids_host.end(),
+                      front_ids_upload_.get() + fronts[i].ids_offset);
+            fronts[i].values = storage.values.get() + fronts[i].values_offset;
+            fronts[i].ids = storage.ids.get() + fronts[i].ids_offset;
+            fronts[i].pivot_size =
+                storage.pivot_size.get() + fronts[i].pivot_offset;
+        }
+        checkCuda(cudaMemcpyAsync(
+                      storage.ids.get(), front_ids_upload_.get(),
+                      id_count * sizeof(int), cudaMemcpyHostToDevice, 0),
+                  "upload batched front IDs");
+
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            assembleFront(fronts[i]);
+        }
+        return storage;
     }
 
     DeviceFrontDescriptor makeDescriptor(FrontWork& front) const
     {
         DeviceFrontDescriptor descriptor;
-        descriptor.values = front.values.get();
-        descriptor.ids = front.ids.get();
-        descriptor.pivot_size = front.pivot_size.get();
+        descriptor.values = front.values;
+        descriptor.ids = front.ids;
+        descriptor.pivot_size = front.pivot_size;
         descriptor.order = front.order;
         descriptor.candidate_count = front.candidate_count;
         descriptor.gamma = options_.bunch_kaufman_gamma;
@@ -1846,17 +1934,17 @@ private:
                         cublas, CUBLAS_OP_N, CUBLAS_OP_T,
                         remaining, remaining, panel_columns,
                         &alpha,
-                        front.values.get() + step + panel_begin * front.order,
+                        front.values + step + panel_begin * front.order,
                         front.order,
                         work.get() + step,
                         front.order,
                         &beta,
-                        front.values.get() + step + step * front.order,
+                        front.values + step + step * front.order,
                         front.order),
                     "flush large BK panel with SGEMM");
         const int total = remaining * remaining;
         mirrorLowerToUpperKernel<<<(total + 255) / 256, 256, 0, stream>>>(
-            front.values.get(), front.order, step);
+            front.values, front.order, step);
         checkCuda(cudaGetLastError(), "mirror SGEMM Schur update");
     }
 
@@ -1882,8 +1970,8 @@ private:
         while (step < active_end) {
             const int panel_begin = step;
             factorLargePanelControlKernel<<<1, 256, 0, stream>>>(
-                front.values.get(), work.get(), front.ids.get(),
-                front.pivot_size.get(), front.order, panel_begin, active_end,
+                front.values, work.get(), front.ids,
+                front.pivot_size, front.order, panel_begin, active_end,
                 delay_first, options_.panel_size, options_.bunch_kaufman_gamma,
                 options_.absolute_pivot_tolerance,
                 options_.relative_pivot_tolerance,
@@ -1977,18 +2065,18 @@ private:
             node.factor_ids.allocate(static_cast<std::size_t>(front.order));
             node.pivot_size.allocate(static_cast<std::size_t>(front.accepted));
             checkCuda(cudaMemcpyAsync(
-                          node.factor_values.get(), front.values.get(),
+                          node.factor_values.get(), front.values,
                           static_cast<std::size_t>(front.order) * front.accepted *
                               sizeof(float),
                           cudaMemcpyDeviceToDevice, 0),
                       "save GPU supernode factor");
             checkCuda(cudaMemcpyAsync(
-                          node.factor_ids.get(), front.ids.get(),
+                          node.factor_ids.get(), front.ids,
                           static_cast<std::size_t>(front.order) * sizeof(int),
                           cudaMemcpyDeviceToDevice, 0),
                       "save factor IDs");
             checkCuda(cudaMemcpyAsync(
-                          node.pivot_size.get(), front.pivot_size.get(),
+                          node.pivot_size.get(), front.pivot_size,
                           static_cast<std::size_t>(front.accepted) * sizeof(int),
                           cudaMemcpyDeviceToDevice, 0),
                       "save pivot block sizes");
@@ -2005,11 +2093,11 @@ private:
                 static_cast<std::size_t>(node.contribution_order));
             const int total = node.contribution_order * node.contribution_order;
             extractContributionKernel<<<(total + 255) / 256, 256>>>(
-                front.values.get(), front.order, front.accepted,
+                front.values, front.order, front.accepted,
                 node.contribution_values.get(), node.contribution_order);
             checkCuda(cudaMemcpyAsync(
                           node.contribution_ids.get(),
-                          front.ids.get() + front.accepted,
+                          front.ids + front.accepted,
                           static_cast<std::size_t>(node.contribution_order) * sizeof(int),
                           cudaMemcpyDeviceToDevice, 0),
                       "save contribution IDs");
@@ -2037,7 +2125,7 @@ private:
         std::vector<DeviceFrontIdCopy> host_copies(fronts.size());
         std::size_t total_ids = 0;
         for (std::size_t i = 0; i < fronts.size(); ++i) {
-            host_copies[i].source = fronts[i].ids.get();
+            host_copies[i].source = fronts[i].ids;
             host_copies[i].destination_offset = total_ids;
             host_copies[i].count = fronts[i].order;
             total_ids += static_cast<std::size_t>(fronts[i].order);
@@ -2112,8 +2200,10 @@ private:
                 fronts.reserve(batch_nodes.size());
                 const HostClock::time_point assembly_begin = HostClock::now();
                 for (std::size_t i = 0; i < batch_nodes.size(); ++i) {
-                    fronts.push_back(assembleFront(batch_nodes[i], symbolic));
+                    fronts.push_back(prepareFront(batch_nodes[i], symbolic));
                 }
+                FrontBatchStorage front_storage = materializeFrontBatch(fronts);
+                (void)front_storage;
                 statistics_.front_assembly_milliseconds += elapsedMilliseconds(
                     assembly_begin, HostClock::now());
 
@@ -2202,6 +2292,7 @@ private:
     DeviceBuffer<int> base_cols_;
     DeviceBuffer<float> base_values_;
     DeviceBuffer<int> global_to_local_;
+    ReusablePinnedBuffer<int> front_ids_upload_;
     std::vector<int> host_seen_stamp_;
     int host_seen_generation_;
     std::vector<cudaStream_t> large_streams_;
