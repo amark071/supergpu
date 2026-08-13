@@ -97,20 +97,24 @@ LAPACK 的 \code{dgetrf} 函数在大量的求解器中担负这个责任,
 
 \subsubsection{主元接受阈值}
 
-设第 $k$ 步尚未分解的活动子块为
+设第 $k$ 步尚未分解的子块为
 $S^{(k)}=\left[s_{ij}^{(k)}\right]_{i,j=k}^{f}$，
 其中 $f$ 为 Fully Summed 块的阶数，$\tau\in(0,1)$ 为主元接受阈值。
-列主元只搜索活动子块第 $k$ 列，候选主元所在行为
+列主元只搜索活动子块第 $k$ 列，候选列主元所在行为
 $$p_k=\underset{k\le i\le f}{\operatorname{argmax}}
       \left|s_{ik}^{(k)}\right|,
 \qquad
 \alpha_k=\left|s_{p_k k}^{(k)}\right|.$$
-\qquad 记活动子块中的最大元素为
-$\beta_k=\left\|S^{(k)}\right\|_{\max}
-=\max_{k\le i,j\le f}\left|s_{ij}^{(k)}\right|$，
+\qquad 记当前子块的侯选主元为 $h_k$：
 当
-$\alpha_k\ge\tau\beta_k$
-时，认为列主元足够稳定。用行置换矩阵 $P_k$ 交换第 $k$ 行和第 $p_k$ 行：
+$h_k\ge\tau\alpha_k$
+时，认为当前的侯选主元主元足够稳定，于是不用做交换就可以利用其作为主元进行分解。反之说明
+需要与侯选列主元的第P行作交换。但是还存在一种特殊情况就是当前列的主元为零，无法选出列主元。
+此时需要在整个活动子块中搜索最大元素作为主元：
+记活动子块中的最大元素为
+$$\beta_k=\left\|S^{(k)}\right\|_{\max}
+=\max_{k\le i,j\le f}\left|s_{ij}^{(k)}\right|$$
+用行置换矩阵 $P_k$ 交换第 $k$ 行和第 $p_k$ 行：
 $$\widetilde S^{(k)}=P_kS^{(k)},
 \qquad
 d_k=\widetilde s_{kk}^{(k)}=s_{p_k k}^{(k)}.$$
@@ -118,7 +122,7 @@ d_k=\widetilde s_{kk}^{(k)}=s_{p_k k}^{(k)}.$$
 
 若
 $\alpha_k<\tau\beta_k$
-，则在整个活动子块中搜索最大元素：
+了，则在整个活动子块中搜索最大元素：
 
 \[
 (p_k,q_k)=\underset{k\le i,j\le f}{\operatorname{argmax}}

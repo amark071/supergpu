@@ -221,6 +221,14 @@ struct DeviceFrontDescriptor {
     int two_by_two;
 };
 
+struct DeviceSolveDescriptor {
+    const float* factor;
+    const int* ids;
+    const int* pivot_size;
+    int order;
+    int accepted;
+};
+
 struct DeviceMaxPair {
     float value;
     int index;
@@ -1034,31 +1042,40 @@ __global__ void mirrorLowerToUpperKernel(float* matrix, int ld, int begin)
     }
 }
 
-__global__ void forwardFactorKernel(
+__global__ void forwardSolveWaveKernel(
     float* rhs,
-    const float* factor,
-    const int* ids,
-    const int* pivot_size,
-    int order,
-    int accepted)
+    const DeviceSolveDescriptor* factors,
+    int factor_begin,
+    int factor_count)
 {
     __shared__ float first;
     __shared__ float second;
+    const int local_index = static_cast<int>(blockIdx.x);
+    if (local_index >= factor_count) {
+        return;
+    }
+    const DeviceSolveDescriptor descriptor = factors[factor_begin + local_index];
+
     int step = 0;
-    while (step < accepted) {
-        const int block_size = pivot_size[step];
+    while (step < descriptor.accepted) {
+        const int block_size = descriptor.pivot_size[step];
         if (threadIdx.x == 0) {
-            first = rhs[ids[step]];
-            second = block_size == 2 ? rhs[ids[step + 1]] : 0.0f;
+            first = rhs[descriptor.ids[step]];
+            second = block_size == 2 ? rhs[descriptor.ids[step + 1]] : 0.0f;
         }
         __syncthreads();
         const int row_begin = step + block_size;
-        for (int row = row_begin + threadIdx.x; row < order; row += blockDim.x) {
-            float value = factor[row + step * order] * first;
+        for (int row = row_begin + threadIdx.x;
+             row < descriptor.order;
+             row += blockDim.x) {
+            float value = descriptor.factor[
+                row + step * descriptor.order] * first;
             if (block_size == 2) {
-                value += factor[row + (step + 1) * order] * second;
+                value += descriptor.factor[
+                    row + (step + 1) * descriptor.order] * second;
             }
-            rhs[ids[row]] -= value;
+            // Fronts in one elimination-tree wave can update the same ancestor.
+            atomicAdd(rhs + descriptor.ids[row], -value);
         }
         __syncthreads();
         step += block_size;
@@ -1067,54 +1084,68 @@ __global__ void forwardFactorKernel(
 
 __global__ void diagonalSolveKernel(
     float* rhs,
-    const float* factor,
-    const int* ids,
-    const int* pivot_size,
-    int order,
-    int accepted)
+    const DeviceSolveDescriptor* factors,
+    int factor_count)
 {
-    for (int step = threadIdx.x; step < accepted; step += blockDim.x) {
-        if (pivot_size[step] == 1) {
-            rhs[ids[step]] /= factor[step + step * order];
-        } else if (pivot_size[step] == 2) {
-            const float a = factor[step + step * order];
-            const float b = factor[step + 1 + step * order];
-            const float c = factor[step + 1 + (step + 1) * order];
+    const int factor_index = static_cast<int>(blockIdx.x);
+    if (factor_index >= factor_count) {
+        return;
+    }
+    const DeviceSolveDescriptor descriptor = factors[factor_index];
+    for (int step = threadIdx.x;
+         step < descriptor.accepted;
+         step += blockDim.x) {
+        if (descriptor.pivot_size[step] == 1) {
+            rhs[descriptor.ids[step]] /=
+                descriptor.factor[step + step * descriptor.order];
+        } else if (descriptor.pivot_size[step] == 2) {
+            const float a = descriptor.factor[step + step * descriptor.order];
+            const float b = descriptor.factor[step + 1 + step * descriptor.order];
+            const float c = descriptor.factor[
+                step + 1 + (step + 1) * descriptor.order];
             const float determinant = a * c - b * b;
-            const float first = rhs[ids[step]];
-            const float second = rhs[ids[step + 1]];
-            rhs[ids[step]] = (c * first - b * second) / determinant;
-            rhs[ids[step + 1]] = (a * second - b * first) / determinant;
+            const float diagonal_first = rhs[descriptor.ids[step]];
+            const float diagonal_second = rhs[descriptor.ids[step + 1]];
+            rhs[descriptor.ids[step]] =
+                (c * diagonal_first - b * diagonal_second) / determinant;
+            rhs[descriptor.ids[step + 1]] =
+                (a * diagonal_second - b * diagonal_first) / determinant;
         }
     }
 }
 
-__global__ void backwardFactorKernel(
+__global__ void backwardSolveWaveKernel(
     float* rhs,
-    const float* factor,
-    const int* ids,
-    const int* pivot_size,
-    int order,
-    int accepted)
+    const DeviceSolveDescriptor* factors,
+    int factor_begin,
+    int factor_count)
 {
     __shared__ float partial_first[256];
     __shared__ float partial_second[256];
-    int last = accepted - 1;
+    const int local_index = static_cast<int>(blockIdx.x);
+    if (local_index >= factor_count) {
+        return;
+    }
+    const DeviceSolveDescriptor descriptor = factors[factor_begin + local_index];
+
+    int last = descriptor.accepted - 1;
     while (last >= 0) {
         int step = last;
-        if (pivot_size[step] == 0) {
+        if (descriptor.pivot_size[step] == 0) {
             --step;
         }
-        const int block_size = pivot_size[step];
+        const int block_size = descriptor.pivot_size[step];
         float sum_first = 0.0f;
         float sum_second = 0.0f;
         for (int row = step + block_size + threadIdx.x;
-             row < order;
+             row < descriptor.order;
              row += blockDim.x) {
-            const float value = rhs[ids[row]];
-            sum_first += factor[row + step * order] * value;
+            const float value = rhs[descriptor.ids[row]];
+            sum_first += descriptor.factor[
+                row + step * descriptor.order] * value;
             if (block_size == 2) {
-                sum_second += factor[row + (step + 1) * order] * value;
+                sum_second += descriptor.factor[
+                    row + (step + 1) * descriptor.order] * value;
             }
         }
         partial_first[threadIdx.x] = sum_first;
@@ -1128,9 +1159,9 @@ __global__ void backwardFactorKernel(
             __syncthreads();
         }
         if (threadIdx.x == 0) {
-            rhs[ids[step]] -= partial_first[0];
+            rhs[descriptor.ids[step]] -= partial_first[0];
             if (block_size == 2) {
-                rhs[ids[step + 1]] -= partial_second[0];
+                rhs[descriptor.ids[step + 1]] -= partial_second[0];
             }
         }
         __syncthreads();
@@ -1238,6 +1269,7 @@ public:
             statistics_.input_preprocessing_milliseconds = elapsedMilliseconds(
                 preprocessing_begin, HostClock::now());
             runTreeWaves(symbolic);
+            prepareSolveData();
 
             checkCuda(cudaEventRecord(stop), "cudaEventRecord(stop)");
             checkCuda(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
@@ -1286,48 +1318,37 @@ public:
             throw std::invalid_argument("right-hand side size does not match the factor");
         }
 
-        DeviceBuffer<float> device_rhs(rhs.size());
         checkCuda(cudaMemcpy(
-                      device_rhs.get(), rhs.data(), rhs.size() * sizeof(float),
+                      solve_rhs_.get(), rhs.data(), rhs.size() * sizeof(float),
                       cudaMemcpyHostToDevice),
                   "copy RHS to GPU");
 
-        for (std::size_t i = 0; i < factorization_order_.size(); ++i) {
-            const NodeData& node = nodes_[factorization_order_[i]];
-            if (node.accepted == 0) {
-                continue;
+        for (std::size_t wave = 0; wave + 1 < solve_wave_offsets_.size(); ++wave) {
+            const int begin = solve_wave_offsets_[wave];
+            const int count = solve_wave_offsets_[wave + 1] - begin;
+            if (count != 0) {
+                forwardSolveWaveKernel<<<count, 256>>>(
+                    solve_rhs_.get(), solve_descriptors_.get(), begin, count);
             }
-            forwardFactorKernel<<<1, 256>>>(
-                device_rhs.get(), node.factor_values.get(), node.factor_ids.get(),
-                node.pivot_size.get(), node.order, node.accepted);
         }
-        checkCuda(cudaGetLastError(), "launch forward solve kernels");
-
-        for (std::size_t i = 0; i < factorization_order_.size(); ++i) {
-            const NodeData& node = nodes_[factorization_order_[i]];
-            if (node.accepted == 0) {
-                continue;
+        if (solve_descriptor_count_ != 0) {
+            diagonalSolveKernel<<<solve_descriptor_count_, 256>>>(
+                solve_rhs_.get(), solve_descriptors_.get(),
+                solve_descriptor_count_);
+        }
+        for (std::size_t reverse = solve_wave_offsets_.size(); reverse > 1; --reverse) {
+            const int begin = solve_wave_offsets_[reverse - 2];
+            const int count = solve_wave_offsets_[reverse - 1] - begin;
+            if (count != 0) {
+                backwardSolveWaveKernel<<<count, 256>>>(
+                    solve_rhs_.get(), solve_descriptors_.get(), begin, count);
             }
-            diagonalSolveKernel<<<1, 256>>>(
-                device_rhs.get(), node.factor_values.get(), node.factor_ids.get(),
-                node.pivot_size.get(), node.order, node.accepted);
         }
-        checkCuda(cudaGetLastError(), "launch diagonal solve kernels");
-
-        for (std::size_t reverse = factorization_order_.size(); reverse > 0; --reverse) {
-            const NodeData& node = nodes_[factorization_order_[reverse - 1]];
-            if (node.accepted == 0) {
-                continue;
-            }
-            backwardFactorKernel<<<1, 256>>>(
-                device_rhs.get(), node.factor_values.get(), node.factor_ids.get(),
-                node.pivot_size.get(), node.order, node.accepted);
-        }
-        checkCuda(cudaGetLastError(), "launch backward solve kernels");
+        checkCuda(cudaGetLastError(), "launch tree-wave GPU solve kernels");
 
         std::vector<float> solution(rhs.size());
         checkCuda(cudaMemcpy(
-                      solution.data(), device_rhs.get(), rhs.size() * sizeof(float),
+                      solution.data(), solve_rhs_.get(), rhs.size() * sizeof(float),
                       cudaMemcpyDeviceToHost),
                   "copy solution from GPU");
         return solution;
@@ -1498,6 +1519,11 @@ private:
 
     void resetNumericState()
     {
+        solve_descriptors_.reset();
+        solve_rhs_.reset();
+        solve_descriptor_count_ = 0;
+        factorization_wave_ends_.clear();
+        solve_wave_offsets_.clear();
         nodes_.clear();
         factorization_order_.clear();
         base_owner_ptr_.clear();
@@ -1511,6 +1537,47 @@ private:
         n_ = 0;
         complete_ = false;
         diagnostic_.clear();
+    }
+
+    void prepareSolveData()
+    {
+        std::vector<DeviceSolveDescriptor> descriptors;
+        descriptors.reserve(factorization_order_.size());
+        solve_wave_offsets_.clear();
+        solve_wave_offsets_.push_back(0);
+        std::size_t wave = 0;
+        for (std::size_t i = 0; i < factorization_order_.size(); ++i) {
+            const NodeData& node = nodes_[factorization_order_[i]];
+            if (node.accepted != 0) {
+                DeviceSolveDescriptor descriptor;
+                descriptor.factor = node.factor_values.get();
+                descriptor.ids = node.factor_ids.get();
+                descriptor.pivot_size = node.pivot_size.get();
+                descriptor.order = node.order;
+                descriptor.accepted = node.accepted;
+                descriptors.push_back(descriptor);
+            }
+            while (wave < factorization_wave_ends_.size() &&
+                   i + 1 == factorization_wave_ends_[wave]) {
+                solve_wave_offsets_.push_back(
+                    static_cast<int>(descriptors.size()));
+                ++wave;
+            }
+        }
+        if (solve_wave_offsets_.size() != factorization_wave_ends_.size() + 1) {
+            throw std::logic_error("invalid factorization wave boundaries");
+        }
+
+        solve_descriptor_count_ = static_cast<int>(descriptors.size());
+        solve_descriptors_.allocate(descriptors.size());
+        if (!descriptors.empty()) {
+            checkCuda(cudaMemcpyAsync(
+                          solve_descriptors_.get(), descriptors.data(),
+                          descriptors.size() * sizeof(DeviceSolveDescriptor),
+                          cudaMemcpyHostToDevice, 0),
+                      "upload persistent solve descriptors");
+        }
+        solve_rhs_.allocate(static_cast<std::size_t>(n_));
     }
 
     void prepareTree(const CholmodSymbolicResult& symbolic)
@@ -2263,6 +2330,7 @@ private:
                     }
                 }
             }
+            factorization_wave_ends_.push_back(factorization_order_.size());
         }
 
         if (processed != nodes_.size()) {
@@ -2287,6 +2355,11 @@ private:
     cublasHandle_t cublas_;
     std::vector<NodeData> nodes_;
     std::vector<int> factorization_order_;
+    std::vector<std::size_t> factorization_wave_ends_;
+    std::vector<int> solve_wave_offsets_;
+    DeviceBuffer<DeviceSolveDescriptor> solve_descriptors_;
+    mutable DeviceBuffer<float> solve_rhs_;
+    int solve_descriptor_count_ = 0;
     std::vector<int> base_owner_ptr_;
     DeviceBuffer<int> base_rows_;
     DeviceBuffer<int> base_cols_;
