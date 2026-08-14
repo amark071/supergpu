@@ -76,12 +76,20 @@ bool parseCommandLine(
     return true;
 }
 
-InputMatrix loadInputMatrix(const std::string& filename)
+InputMatrix loadInputMatrix(
+    const std::string& filename,
+    bool input_is_binary_csc)
 {
     InputMatrix matrix;
-    readCSCMatrix(
-        filename, matrix.n, matrix.declared_nonzeros,
-        matrix.row_indices, matrix.col_ptr, matrix.values);
+    if (input_is_binary_csc) {
+        readBinaryCSCMatrix(
+            filename, matrix.n, matrix.declared_nonzeros,
+            matrix.row_indices, matrix.col_ptr, matrix.values);
+    } else {
+        readCSCMatrix(
+            filename, matrix.n, matrix.declared_nonzeros,
+            matrix.row_indices, matrix.col_ptr, matrix.values);
+    }
     return matrix;
 }
 
@@ -340,7 +348,8 @@ int runSupernodalGpuApplication(
         return 1;
     }
 
-    const InputMatrix input = loadInputMatrix(files.input_filename);
+    const InputMatrix input = loadInputMatrix(
+        files.input_filename, files.input_is_binary_csc);
     const SymbolicPipelineResult pipeline = runSymbolicPipeline(
         input.n, input.col_ptr, input.row_indices, input.values,
         makeSymbolicOptions(options, files.symbolic_cache_filename));

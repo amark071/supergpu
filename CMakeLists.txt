@@ -220,6 +220,14 @@ if(SUPERNODAL_BUILD_TESTS)
         PRIVATE unsymmetric_matching)
     target_compile_features(unsymmetric_matching_smoke PRIVATE cxx_std_14)
     add_test(NAME unsymmetric_matching_smoke COMMAND unsymmetric_matching_smoke)
+
+    add_executable(binary_csc_io_smoke tests/binary_csc_io_smoke.cpp)
+    target_link_libraries(binary_csc_io_smoke PRIVATE io_func)
+    target_compile_definitions(binary_csc_io_smoke PRIVATE
+        BINARY_CSC_SMOKE_PATH="${CMAKE_CURRENT_BINARY_DIR}/binary_csc_io_smoke.bin")
+    target_compile_features(binary_csc_io_smoke PRIVATE cxx_std_11)
+    add_test(NAME binary_csc_io_smoke COMMAND binary_csc_io_smoke)
+
 endif()
 
 set(SYMBOLIC_VISUALIZATION_DIR "${CMAKE_BINARY_DIR}/visualization")
@@ -323,7 +331,9 @@ endif()
 if(TARGET unsymmetric_matching_smoke)
     list(APPEND PROJECT_WARNING_TARGETS unsymmetric_matching_smoke)
 endif()
-
+if(TARGET binary_csc_io_smoke)
+    list(APPEND PROJECT_WARNING_TARGETS binary_csc_io_smoke)
+endif()
 if(MSVC)
     foreach(target_name IN LISTS PROJECT_WARNING_TARGETS)
         target_compile_options(${target_name} PRIVATE

@@ -1,0 +1,2417 @@
+#include "cholmod_symbolic.hpp"
+
+#include <cublas_v2.h>
+#include <cuda_runtime.h>
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <exception>
+#include <limits>
+#include <sstream>
+#include <stdexcept>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace {
+
+void checkCuda(cudaError_t status, const char* operation)
+{
+    if (status != cudaSuccess) {
+        throw std::runtime_error(
+            std::string(operation) + ": " + cudaGetErrorString(status));
+    }
+}
+
+void checkCublas(cublasStatus_t status, const char* operation)
+{
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        std::ostringstream message;
+        message << operation << ": cuBLAS status " << static_cast<int>(status);
+        throw std::runtime_error(message.str());
+    }
+}
+
+typedef std::chrono::steady_clock HostClock;
+
+double elapsedMilliseconds(
+    const HostClock::time_point& begin,
+    const HostClock::time_point& end)
+{
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+bool asynchronousMemoryPoolEnabled()
+{
+#if CUDART_VERSION >= 11020
+    static const bool enabled = []() {
+        int device = 0;
+        int supported = 0;
+        if (cudaGetDevice(&device) != cudaSuccess ||
+            cudaDeviceGetAttribute(
+                &supported, cudaDevAttrMemoryPoolsSupported, device) != cudaSuccess ||
+            supported == 0) {
+            cudaGetLastError();
+            return false;
+        }
+        cudaMemPool_t pool = 0;
+        if (cudaDeviceGetDefaultMemPool(&pool, device) != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        std::uint64_t release_threshold =
+            std::numeric_limits<std::uint64_t>::max();
+        if (cudaMemPoolSetAttribute(
+                pool, cudaMemPoolAttrReleaseThreshold,
+                &release_threshold) != cudaSuccess) {
+            cudaGetLastError();
+            return false;
+        }
+        return true;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
+template <typename T>
+class DeviceBuffer {
+public:
+    DeviceBuffer() : data_(0), size_(0), stream_(0) {}
+    explicit DeviceBuffer(std::size_t size, cudaStream_t stream = 0)
+        : data_(0), size_(0), stream_(stream)
+    {
+        allocate(size, stream);
+    }
+    ~DeviceBuffer() { reset(); }
+
+    DeviceBuffer(DeviceBuffer&& other) noexcept
+        : data_(other.data_), size_(other.size_), stream_(other.stream_)
+    {
+        other.data_ = 0;
+        other.size_ = 0;
+        other.stream_ = 0;
+    }
+
+    DeviceBuffer& operator=(DeviceBuffer&& other) noexcept
+    {
+        if (this != &other) {
+            reset();
+            data_ = other.data_;
+            size_ = other.size_;
+            stream_ = other.stream_;
+            other.data_ = 0;
+            other.size_ = 0;
+            other.stream_ = 0;
+        }
+        return *this;
+    }
+
+    DeviceBuffer(const DeviceBuffer&) = delete;
+    DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+
+    void allocate(std::size_t size, cudaStream_t stream = 0)
+    {
+        reset();
+        stream_ = stream;
+        if (size != 0) {
+#if CUDART_VERSION >= 11020
+            if (asynchronousMemoryPoolEnabled()) {
+                checkCuda(cudaMallocAsync(
+                              reinterpret_cast<void**>(&data_),
+                              size * sizeof(T), stream_),
+                          "cudaMallocAsync");
+            } else
+#endif
+            {
+                checkCuda(cudaMalloc(
+                              reinterpret_cast<void**>(&data_), size * sizeof(T)),
+                          "cudaMalloc");
+            }
+            size_ = size;
+        }
+    }
+
+    void reset() noexcept
+    {
+        if (data_ != 0) {
+#if CUDART_VERSION >= 11020
+            if (asynchronousMemoryPoolEnabled()) {
+                cudaFreeAsync(data_, stream_);
+            } else
+#endif
+            {
+                cudaFree(data_);
+            }
+        }
+        data_ = 0;
+        size_ = 0;
+        stream_ = 0;
+    }
+
+    T* get() { return data_; }
+    const T* get() const { return data_; }
+    std::size_t size() const { return size_; }
+
+private:
+    T* data_;
+    std::size_t size_;
+    cudaStream_t stream_;
+};
+
+template <typename T>
+class ReusablePinnedBuffer {
+public:
+    ReusablePinnedBuffer() : data_(0), capacity_(0) {}
+    ~ReusablePinnedBuffer()
+    {
+        if (data_ != 0) {
+            cudaFreeHost(data_);
+        }
+    }
+
+    ReusablePinnedBuffer(const ReusablePinnedBuffer&) = delete;
+    ReusablePinnedBuffer& operator=(const ReusablePinnedBuffer&) = delete;
+
+    void reserve(std::size_t capacity)
+    {
+        if (capacity <= capacity_) {
+            return;
+        }
+        T* replacement = 0;
+        checkCuda(cudaMallocHost(
+                      reinterpret_cast<void**>(&replacement),
+                      capacity * sizeof(T)),
+                  "cudaMallocHost(reusable upload buffer)");
+        if (data_ != 0) {
+            checkCuda(cudaFreeHost(data_),
+                      "cudaFreeHost(reusable upload buffer)");
+        }
+        data_ = replacement;
+        capacity_ = capacity;
+    }
+
+    T* get() { return data_; }
+    const T* get() const { return data_; }
+    T& operator[](std::size_t index) { return data_[index]; }
+
+private:
+    T* data_;
+    std::size_t capacity_;
+};
+
+struct DeviceFrontDescriptor {
+    double* values;
+    int* ids;
+    int* pivot_size;
+    int order;
+    int candidate_count;
+    double gamma;
+    double absolute_tolerance;
+    double relative_tolerance;
+    double two_by_two_tolerance;
+    int accepted;
+    int delayed;
+    int one_by_one;
+    int two_by_two;
+};
+
+struct DeviceSolveDescriptor {
+    const double* factor;
+    const int* ids;
+    const int* pivot_size;
+    int order;
+    int accepted;
+};
+
+struct DeviceMaxPair {
+    double value;
+    int index;
+};
+
+struct DeviceLargePanelState {
+    int step;
+    int active_end;
+    int panel_columns;
+    int one_by_one;
+    int two_by_two;
+    int delay_current;
+};
+
+struct DeviceFrontIdCopy {
+    const int* source;
+    std::size_t destination_offset;
+    int count;
+};
+
+__device__ double absf(double value)
+{
+    return value < 0.0 ? -value : value;
+}
+
+__device__ double lowerValue(const double* matrix, int ld, int row, int col)
+{
+    const int r = row >= col ? row : col;
+    const int c = row >= col ? col : row;
+    return matrix[r + c * ld];
+}
+
+__global__ void setFrontPositionsKernel(
+    const int* ids,
+    int order,
+    int* global_to_local)
+{
+    const int position = blockIdx.x * blockDim.x + threadIdx.x;
+    if (position < order) {
+        global_to_local[ids[position]] = position;
+    }
+}
+
+__global__ void clearFrontPositionsKernel(
+    const int* ids,
+    int order,
+    int* global_to_local)
+{
+    const int position = blockIdx.x * blockDim.x + threadIdx.x;
+    if (position < order) {
+        global_to_local[ids[position]] = -1;
+    }
+}
+
+__global__ void scatterBaseEntriesKernel(
+    double* front,
+    int ld,
+    const int* global_to_local,
+    const int* rows,
+    const int* cols,
+    const double* values,
+    int begin,
+    int end)
+{
+    const int entry = begin + blockIdx.x * blockDim.x + threadIdx.x;
+    if (entry >= end) {
+        return;
+    }
+    const int local_row = global_to_local[rows[entry]];
+    const int local_col = global_to_local[cols[entry]];
+    if (local_row < 0 || local_col < 0) {
+        return;
+    }
+    const double value = values[entry];
+    atomicAdd(front + local_row + local_col * ld, value);
+    if (local_row != local_col) {
+        atomicAdd(front + local_col + local_row * ld, value);
+    }
+}
+
+__global__ void extendAddKernel(
+    double* parent,
+    int parent_ld,
+    const int* global_to_local,
+    const double* child,
+    const int* child_ids,
+    int child_order)
+{
+    const int linear = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = child_order * child_order;
+    if (linear >= total) {
+        return;
+    }
+    const int row = linear % child_order;
+    const int col = linear / child_order;
+    if (row < col) {
+        return;
+    }
+    const int parent_row = global_to_local[child_ids[row]];
+    const int parent_col = global_to_local[child_ids[col]];
+    if (parent_row < 0 || parent_col < 0) {
+        return;
+    }
+    const double value = child[row + col * child_order];
+    atomicAdd(parent + parent_row + parent_col * parent_ld, value);
+    if (parent_row != parent_col) {
+        atomicAdd(parent + parent_col + parent_row * parent_ld, value);
+    }
+}
+
+__global__ void packFrontIdsKernel(
+    const DeviceFrontIdCopy* copies,
+    int copy_count,
+    int* packed_ids)
+{
+    const int copy_index = static_cast<int>(blockIdx.x);
+    if (copy_index >= copy_count) {
+        return;
+    }
+    const DeviceFrontIdCopy copy = copies[copy_index];
+    for (int i = threadIdx.x; i < copy.count; i += blockDim.x) {
+        packed_ids[copy.destination_offset + static_cast<std::size_t>(i)] =
+            copy.source[i];
+    }
+}
+
+__device__ void restrictedSymmetricSwapBlock(
+    double* matrix,
+    int ld,
+    int order,
+    int step,
+    int lhs,
+    int rhs,
+    int* ids)
+{
+    if (lhs == rhs) {
+        __syncthreads();
+        return;
+    }
+
+    for (int col = threadIdx.x; col < step; col += blockDim.x) {
+        const double value = matrix[lhs + col * ld];
+        matrix[lhs + col * ld] = matrix[rhs + col * ld];
+        matrix[rhs + col * ld] = value;
+    }
+    __syncthreads();
+
+    for (int row = step + threadIdx.x; row < order; row += blockDim.x) {
+        const double value = matrix[row + lhs * ld];
+        matrix[row + lhs * ld] = matrix[row + rhs * ld];
+        matrix[row + rhs * ld] = value;
+    }
+    __syncthreads();
+
+    for (int col = step + threadIdx.x; col < order; col += blockDim.x) {
+        const double value = matrix[lhs + col * ld];
+        matrix[lhs + col * ld] = matrix[rhs + col * ld];
+        matrix[rhs + col * ld] = value;
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        const int id = ids[lhs];
+        ids[lhs] = ids[rhs];
+        ids[rhs] = id;
+    }
+    __syncthreads();
+}
+
+__global__ void factorSingleColumnKernel(DeviceFrontDescriptor* descriptors)
+{
+    DeviceFrontDescriptor& front = descriptors[blockIdx.x];
+    double* matrix = front.values;
+    const int order = front.order;
+
+    __shared__ int accepted;
+    __shared__ double diagonal;
+    __shared__ double column_maximum[256];
+    double local_maximum = 0.0;
+    for (int row = 1 + threadIdx.x; row < order; row += blockDim.x) {
+        local_maximum = fmax(local_maximum, absf(matrix[row]));
+    }
+    column_maximum[threadIdx.x] = local_maximum;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (threadIdx.x < stride) {
+            column_maximum[threadIdx.x] = fmax(
+                column_maximum[threadIdx.x],
+                column_maximum[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        diagonal = matrix[0];
+        const double diagonal_absolute = absf(diagonal);
+        const double scale = fmax(diagonal_absolute, column_maximum[0]);
+        const double tolerance = fmax(
+            front.absolute_tolerance,
+            front.relative_tolerance * scale);
+        accepted = diagonal_absolute > tolerance &&
+                   (column_maximum[0] <= tolerance ||
+                    diagonal_absolute >= front.gamma * column_maximum[0])
+            ? 1 : 0;
+        front.pivot_size[0] = accepted ? 1 : 0;
+    }
+    __syncthreads();
+
+    if (accepted) {
+        for (int row = 1 + threadIdx.x; row < order; row += blockDim.x) {
+            matrix[row] /= diagonal;
+        }
+        __syncthreads();
+
+        const int remaining = order - 1;
+        const int total = remaining * remaining;
+        for (int linear = threadIdx.x; linear < total; linear += blockDim.x) {
+            const int row = 1 + linear % remaining;
+            const int col = 1 + linear / remaining;
+            if (row >= col) {
+                const double updated = matrix[row + col * order] -
+                    matrix[row] * diagonal * matrix[col];
+                matrix[row + col * order] = updated;
+                if (row != col) {
+                    matrix[col + row * order] = updated;
+                }
+            }
+        }
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        front.accepted = accepted;
+        front.delayed = 1 - accepted;
+        front.one_by_one = accepted;
+        front.two_by_two = 0;
+    }
+}
+
+__global__ void factorSmallMediumKernel(DeviceFrontDescriptor* descriptors)
+{
+    DeviceFrontDescriptor& front = descriptors[blockIdx.x];
+    double* matrix = front.values;
+    const int order = front.order;
+
+    __shared__ int step;
+    __shared__ int active_end;
+    __shared__ int decision;
+    __shared__ int pivot_row;
+    __shared__ int one_count;
+    __shared__ int two_count;
+    __shared__ double pivot_a;
+    __shared__ double pivot_b;
+    __shared__ double pivot_c;
+
+    if (threadIdx.x == 0) {
+        step = 0;
+        active_end = front.candidate_count;
+        one_count = 0;
+        two_count = 0;
+    }
+    __syncthreads();
+
+    while (true) {
+        if (threadIdx.x == 0) {
+            decision = 0;
+            pivot_row = step;
+            if (step < active_end) {
+                const double diagonal = absf(matrix[step + step * order]);
+                double lambda = 0.0;
+                int p = step;
+                // Non-fully-summed rows cannot pivot here, but still set the
+                // column scale used by the Bunch-Kaufman stability test.
+                for (int row = step + 1; row < order; ++row) {
+                    const double candidate = absf(matrix[row + step * order]);
+                    if (candidate > lambda) {
+                        lambda = candidate;
+                        p = row;
+                    }
+                }
+                const double scale = fmax(diagonal, lambda);
+                const double tolerance = fmax(
+                    front.absolute_tolerance,
+                    front.relative_tolerance * scale);
+
+                if (lambda <= tolerance) {
+                    decision = diagonal > tolerance ? 1 : 3;
+                } else if (diagonal >= front.gamma * lambda) {
+                    decision = 1;
+                } else if (p >= active_end) {
+                    // The BK row test requires a fully-summed pivot candidate.
+                    decision = 3;
+                } else {
+                    double sigma = 0.0;
+                    for (int col = step; col < order; ++col) {
+                        if (col != p) {
+                            sigma = fmax(sigma, absf(lowerValue(matrix, order, p, col)));
+                        }
+                    }
+                    if (sigma <= tolerance ||
+                        diagonal >= front.gamma * lambda * lambda / sigma) {
+                        decision = 1;
+                    } else if (absf(matrix[p + p * order]) >= front.gamma * sigma) {
+                        decision = 1;
+                        pivot_row = p;
+                    } else if (step + 1 < active_end) {
+                        const double a = matrix[step + step * order];
+                        const double b = matrix[p + step * order];
+                        const double c = matrix[p + p * order];
+                        const double determinant = a * c - b * b;
+                        const double norm = fmax(absf(a) + absf(b), absf(b) + absf(c));
+                        if (absf(determinant) >
+                                front.two_by_two_tolerance * norm * norm &&
+                            absf(determinant) > tolerance * tolerance) {
+                            decision = 2;
+                            pivot_row = p;
+                            pivot_a = a;
+                            pivot_b = b;
+                            pivot_c = c;
+                        } else {
+                            decision = 3;
+                        }
+                    } else {
+                        decision = 3;
+                    }
+                }
+            }
+        }
+        __syncthreads();
+
+        if (step >= active_end) {
+            break;
+        }
+
+        if (decision == 3) {
+            restrictedSymmetricSwapBlock(
+                matrix, order, order, step, step, active_end - 1, front.ids);
+            if (threadIdx.x == 0) {
+                --active_end;
+            }
+            __syncthreads();
+            continue;
+        }
+
+        if (decision == 1) {
+            restrictedSymmetricSwapBlock(
+                matrix, order, order, step, step, pivot_row, front.ids);
+            if (threadIdx.x == 0) {
+                pivot_a = matrix[step + step * order];
+                front.pivot_size[step] = 1;
+            }
+            __syncthreads();
+
+            for (int row = step + 1 + threadIdx.x; row < order; row += blockDim.x) {
+                matrix[row + step * order] /= pivot_a;
+            }
+            __syncthreads();
+
+            const int remaining = order - step - 1;
+            const int total = remaining * remaining;
+            for (int linear = threadIdx.x; linear < total; linear += blockDim.x) {
+                const int row = step + 1 + linear % remaining;
+                const int col = step + 1 + linear / remaining;
+                if (row >= col) {
+                    const double updated = matrix[row + col * order] -
+                        matrix[row + step * order] * pivot_a *
+                        matrix[col + step * order];
+                    matrix[row + col * order] = updated;
+                    if (row != col) {
+                        matrix[col + row * order] = updated;
+                    }
+                }
+            }
+            __syncthreads();
+            if (threadIdx.x == 0) {
+                ++step;
+                ++one_count;
+            }
+            __syncthreads();
+            continue;
+        }
+
+        restrictedSymmetricSwapBlock(
+            matrix, order, order, step, step + 1, pivot_row, front.ids);
+        if (threadIdx.x == 0) {
+            pivot_a = matrix[step + step * order];
+            pivot_b = matrix[step + 1 + step * order];
+            pivot_c = matrix[step + 1 + (step + 1) * order];
+            front.pivot_size[step] = 2;
+            front.pivot_size[step + 1] = 0;
+        }
+        __syncthreads();
+
+        const double determinant = pivot_a * pivot_c - pivot_b * pivot_b;
+        for (int row = step + 2 + threadIdx.x; row < order; row += blockDim.x) {
+            const double first = matrix[row + step * order];
+            const double second = matrix[row + (step + 1) * order];
+            matrix[row + step * order] =
+                (first * pivot_c - second * pivot_b) / determinant;
+            matrix[row + (step + 1) * order] =
+                (second * pivot_a - first * pivot_b) / determinant;
+        }
+        __syncthreads();
+
+        const int remaining = order - step - 2;
+        const int total = remaining * remaining;
+        for (int linear = threadIdx.x; linear < total; linear += blockDim.x) {
+            const int row = step + 2 + linear % remaining;
+            const int col = step + 2 + linear / remaining;
+            if (row >= col) {
+                const double lr0 = matrix[row + step * order];
+                const double lr1 = matrix[row + (step + 1) * order];
+                const double lc0 = matrix[col + step * order];
+                const double lc1 = matrix[col + (step + 1) * order];
+                const double wr0 = lr0 * pivot_a + lr1 * pivot_b;
+                const double wr1 = lr0 * pivot_b + lr1 * pivot_c;
+                const double updated = matrix[row + col * order] -
+                    wr0 * lc0 - wr1 * lc1;
+                matrix[row + col * order] = updated;
+                if (row != col) {
+                    matrix[col + row * order] = updated;
+                }
+            }
+        }
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            step += 2;
+            ++two_count;
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        front.accepted = step;
+        front.delayed = front.candidate_count - step;
+        front.one_by_one = one_count;
+        front.two_by_two = two_count;
+    }
+}
+
+__global__ void extractContributionKernel(
+    const double* front,
+    int front_order,
+    int accepted,
+    double* contribution,
+    int contribution_order)
+{
+    const int linear = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = contribution_order * contribution_order;
+    if (linear < total) {
+        const int row = linear % contribution_order;
+        const int col = linear / contribution_order;
+        contribution[linear] =
+            front[accepted + row + (accepted + col) * front_order];
+    }
+}
+
+__device__ double panelEntry(
+    const double* matrix,
+    const double* work,
+    int ld,
+    int panel_begin,
+    int panel_columns,
+    int row,
+    int col)
+{
+    const int r = row >= col ? row : col;
+    const int c = row >= col ? col : row;
+    double value = matrix[r + c * ld];
+    for (int q = 0; q < panel_columns; ++q) {
+        value -= matrix[r + (panel_begin + q) * ld] * work[c + q * ld];
+    }
+    return value;
+}
+
+__device__ DeviceMaxPair blockPanelColumnMaximum(
+    const double* matrix,
+    const double* work,
+    int ld,
+    int panel_begin,
+    int panel_columns,
+    int step,
+    double* shared_values,
+    int* shared_indices)
+{
+    double best = 0.0;
+    int best_index = step;
+    for (int row = step + 1 + threadIdx.x; row < ld; row += blockDim.x) {
+        const double value = absf(panelEntry(
+            matrix, work, ld, panel_begin, panel_columns, row, step));
+        if (value > best) {
+            best = value;
+            best_index = row;
+        }
+    }
+    shared_values[threadIdx.x] = best;
+    shared_indices[threadIdx.x] = best_index;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (threadIdx.x < stride &&
+            shared_values[threadIdx.x + stride] > shared_values[threadIdx.x]) {
+            shared_values[threadIdx.x] = shared_values[threadIdx.x + stride];
+            shared_indices[threadIdx.x] = shared_indices[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    DeviceMaxPair result;
+    result.value = shared_values[0];
+    result.index = shared_indices[0];
+    return result;
+}
+
+__device__ DeviceMaxPair blockPanelRowMaximum(
+    const double* matrix,
+    const double* work,
+    int ld,
+    int panel_begin,
+    int panel_columns,
+    int row,
+    int step,
+    double* shared_values,
+    int* shared_indices)
+{
+    double best = 0.0;
+    int best_index = step;
+    for (int col = step + threadIdx.x; col < ld; col += blockDim.x) {
+        if (col != row) {
+            const double value = absf(panelEntry(
+                matrix, work, ld, panel_begin, panel_columns, row, col));
+            if (value > best) {
+                best = value;
+                best_index = col;
+            }
+        }
+    }
+    shared_values[threadIdx.x] = best;
+    shared_indices[threadIdx.x] = best_index;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (threadIdx.x < stride &&
+            shared_values[threadIdx.x + stride] > shared_values[threadIdx.x]) {
+            shared_values[threadIdx.x] = shared_values[threadIdx.x + stride];
+            shared_indices[threadIdx.x] = shared_indices[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    DeviceMaxPair result;
+    result.value = shared_values[0];
+    result.index = shared_indices[0];
+    return result;
+}
+
+__device__ void swapLargePanelRowsAndColumns(
+    double* matrix,
+    double* work,
+    int ld,
+    int panel_columns,
+    int step,
+    int lhs,
+    int rhs,
+    int* ids)
+{
+    restrictedSymmetricSwapBlock(matrix, ld, ld, step, lhs, rhs, ids);
+    if (lhs == rhs) {
+        return;
+    }
+    for (int col = threadIdx.x; col < panel_columns; col += blockDim.x) {
+        const double value = work[lhs + col * ld];
+        work[lhs + col * ld] = work[rhs + col * ld];
+        work[rhs + col * ld] = value;
+    }
+    __syncthreads();
+}
+
+__global__ void factorLargePanelControlKernel(
+    double* matrix,
+    double* work,
+    int* ids,
+    int* pivot_size,
+    int order,
+    int panel_begin,
+    int initial_active_end,
+    int delay_first,
+    int panel_capacity,
+    double gamma,
+    double absolute_tolerance,
+    double relative_tolerance,
+    double two_by_two_tolerance,
+    DeviceLargePanelState* output)
+{
+    __shared__ double reduction_values[256];
+    __shared__ int reduction_indices[256];
+    __shared__ int step;
+    __shared__ int active_end;
+    __shared__ int panel_columns;
+    __shared__ int decision;
+    __shared__ int pivot_row;
+    __shared__ int one_by_one;
+    __shared__ int two_by_two;
+    __shared__ double diagonal_value;
+    __shared__ double column_maximum;
+    __shared__ double tolerance;
+    __shared__ double pivot_a;
+    __shared__ double pivot_b;
+    __shared__ double pivot_c;
+
+    if (threadIdx.x == 0) {
+        step = panel_begin;
+        active_end = initial_active_end;
+        panel_columns = 0;
+        one_by_one = 0;
+        two_by_two = 0;
+    }
+    __syncthreads();
+
+    if (delay_first != 0 && step < active_end) {
+        swapLargePanelRowsAndColumns(
+            matrix, work, order, 0, step, step, active_end - 1, ids);
+        if (threadIdx.x == 0) {
+            --active_end;
+        }
+        __syncthreads();
+    }
+
+    while (step < active_end && panel_columns < panel_capacity) {
+        if (threadIdx.x == 0) {
+            diagonal_value = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step, step);
+            decision = -1;
+            pivot_row = step;
+        }
+        __syncthreads();
+
+        const DeviceMaxPair column_max = blockPanelColumnMaximum(
+            matrix, work, order, panel_begin, panel_columns, step,
+            reduction_values, reduction_indices);
+        if (threadIdx.x == 0) {
+            column_maximum = column_max.value;
+            pivot_row = column_max.index;
+            const double diagonal = absf(diagonal_value);
+            const double scale = fmax(diagonal, column_maximum);
+            tolerance = fmax(absolute_tolerance, relative_tolerance * scale);
+            if (column_maximum <= tolerance) {
+                decision = diagonal > tolerance ? 1 : 0;
+            } else if (diagonal >= gamma * column_maximum) {
+                decision = 1;
+                pivot_row = step;
+            } else if (pivot_row >= active_end) {
+                // A non-fully-summed row cannot participate in the BK row test.
+                decision = 0;
+            }
+        }
+        __syncthreads();
+
+        if (decision < 0) {
+            const DeviceMaxPair row_max = blockPanelRowMaximum(
+                matrix, work, order, panel_begin, panel_columns,
+                pivot_row, step, reduction_values, reduction_indices);
+            if (threadIdx.x == 0) {
+                const double sigma = row_max.value;
+                const double diagonal = absf(diagonal_value);
+                const double candidate_diagonal = absf(panelEntry(
+                    matrix, work, order, panel_begin, panel_columns,
+                    pivot_row, pivot_row));
+                if (sigma <= tolerance ||
+                    diagonal >= gamma * column_maximum * column_maximum / sigma) {
+                    decision = 1;
+                    pivot_row = step;
+                } else if (candidate_diagonal >= gamma * sigma) {
+                    decision = 1;
+                } else if (step + 1 < active_end) {
+                    pivot_a = diagonal_value;
+                    pivot_b = panelEntry(
+                        matrix, work, order, panel_begin, panel_columns,
+                        pivot_row, step);
+                    pivot_c = panelEntry(
+                        matrix, work, order, panel_begin, panel_columns,
+                        pivot_row, pivot_row);
+                    const double determinant = pivot_a * pivot_c - pivot_b * pivot_b;
+                    const double norm = fmax(
+                        absf(pivot_a) + absf(pivot_b),
+                        absf(pivot_b) + absf(pivot_c));
+                    decision = absf(determinant) >
+                                   two_by_two_tolerance * norm * norm &&
+                               absf(determinant) > tolerance * tolerance
+                        ? 2 : 0;
+                } else {
+                    decision = 0;
+                }
+            }
+            __syncthreads();
+        }
+
+        if (decision == 0) {
+            // Preserve delayed-pivot semantics: flush a non-empty panel first.
+            if (panel_columns != 0) {
+                break;
+            }
+            swapLargePanelRowsAndColumns(
+                matrix, work, order, 0, step, step, active_end - 1, ids);
+            if (threadIdx.x == 0) {
+                --active_end;
+            }
+            __syncthreads();
+            continue;
+        }
+
+        if (panel_columns + decision > panel_capacity) {
+            break;
+        }
+
+        if (decision == 1) {
+            swapLargePanelRowsAndColumns(
+                matrix, work, order, panel_columns, step, step, pivot_row, ids);
+            if (threadIdx.x == 0) {
+                pivot_a = panelEntry(
+                    matrix, work, order, panel_begin, panel_columns, step, step);
+            }
+            __syncthreads();
+
+            for (int row = step + threadIdx.x; row < order; row += blockDim.x) {
+                const double value = panelEntry(
+                    matrix, work, order, panel_begin, panel_columns, row, step);
+                if (row == step) {
+                    matrix[row + step * order] = pivot_a;
+                    work[row + panel_columns * order] = pivot_a;
+                } else {
+                    matrix[row + step * order] = value / pivot_a;
+                    work[row + panel_columns * order] = value;
+                }
+            }
+            __syncthreads();
+            if (threadIdx.x == 0) {
+                pivot_size[step] = 1;
+                ++step;
+                ++panel_columns;
+                ++one_by_one;
+            }
+            __syncthreads();
+            continue;
+        }
+
+        swapLargePanelRowsAndColumns(
+            matrix, work, order, panel_columns, step, step + 1, pivot_row, ids);
+        if (threadIdx.x == 0) {
+            pivot_a = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step, step);
+            pivot_b = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step + 1, step);
+            pivot_c = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, step + 1, step + 1);
+        }
+        __syncthreads();
+        const double determinant = pivot_a * pivot_c - pivot_b * pivot_b;
+        for (int row = step + 2 + threadIdx.x; row < order; row += blockDim.x) {
+            const double first = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, row, step);
+            const double second = panelEntry(
+                matrix, work, order, panel_begin, panel_columns, row, step + 1);
+            matrix[row + step * order] =
+                (first * pivot_c - second * pivot_b) / determinant;
+            matrix[row + (step + 1) * order] =
+                (second * pivot_a - first * pivot_b) / determinant;
+            work[row + panel_columns * order] = first;
+            work[row + (panel_columns + 1) * order] = second;
+        }
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            matrix[step + step * order] = pivot_a;
+            matrix[step + 1 + step * order] = pivot_b;
+            matrix[step + 1 + (step + 1) * order] = pivot_c;
+            work[step + panel_columns * order] = pivot_a;
+            work[step + (panel_columns + 1) * order] = pivot_b;
+            work[step + 1 + panel_columns * order] = pivot_b;
+            work[step + 1 + (panel_columns + 1) * order] = pivot_c;
+        }
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            pivot_size[step] = 2;
+            pivot_size[step + 1] = 0;
+            step += 2;
+            panel_columns += 2;
+            ++two_by_two;
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x == 0) {
+        output->step = step;
+        output->active_end = active_end;
+        output->panel_columns = panel_columns;
+        output->one_by_one = one_by_one;
+        output->two_by_two = two_by_two;
+        output->delay_current =
+            step < active_end && panel_columns != 0 && decision == 0 ? 1 : 0;
+    }
+}
+
+__global__ void mirrorLowerToUpperKernel(double* matrix, int ld, int begin)
+{
+    const int remaining = ld - begin;
+    const int linear = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = remaining * remaining;
+    if (linear >= total) {
+        return;
+    }
+    const int row = begin + linear % remaining;
+    const int col = begin + linear / remaining;
+    if (row > col) {
+        matrix[col + row * ld] = matrix[row + col * ld];
+    }
+}
+
+__global__ void forwardSolveWaveKernel(
+    double* rhs,
+    const DeviceSolveDescriptor* factors,
+    int factor_begin,
+    int factor_count)
+{
+    __shared__ double first;
+    __shared__ double second;
+    const int local_index = static_cast<int>(blockIdx.x);
+    if (local_index >= factor_count) {
+        return;
+    }
+    const DeviceSolveDescriptor descriptor = factors[factor_begin + local_index];
+
+    int step = 0;
+    while (step < descriptor.accepted) {
+        const int block_size = descriptor.pivot_size[step];
+        if (threadIdx.x == 0) {
+            first = rhs[descriptor.ids[step]];
+            second = block_size == 2 ? rhs[descriptor.ids[step + 1]] : 0.0;
+        }
+        __syncthreads();
+        const int row_begin = step + block_size;
+        for (int row = row_begin + threadIdx.x;
+             row < descriptor.order;
+             row += blockDim.x) {
+            double value = descriptor.factor[
+                row + step * descriptor.order] * first;
+            if (block_size == 2) {
+                value += descriptor.factor[
+                    row + (step + 1) * descriptor.order] * second;
+            }
+            // Fronts in one elimination-tree wave can update the same ancestor.
+            atomicAdd(rhs + descriptor.ids[row], -value);
+        }
+        __syncthreads();
+        step += block_size;
+    }
+}
+
+__global__ void diagonalSolveKernel(
+    double* rhs,
+    const DeviceSolveDescriptor* factors,
+    int factor_count)
+{
+    const int factor_index = static_cast<int>(blockIdx.x);
+    if (factor_index >= factor_count) {
+        return;
+    }
+    const DeviceSolveDescriptor descriptor = factors[factor_index];
+    for (int step = threadIdx.x;
+         step < descriptor.accepted;
+         step += blockDim.x) {
+        if (descriptor.pivot_size[step] == 1) {
+            rhs[descriptor.ids[step]] /=
+                descriptor.factor[step + step * descriptor.order];
+        } else if (descriptor.pivot_size[step] == 2) {
+            const double a = descriptor.factor[step + step * descriptor.order];
+            const double b = descriptor.factor[step + 1 + step * descriptor.order];
+            const double c = descriptor.factor[
+                step + 1 + (step + 1) * descriptor.order];
+            const double determinant = a * c - b * b;
+            const double diagonal_first = rhs[descriptor.ids[step]];
+            const double diagonal_second = rhs[descriptor.ids[step + 1]];
+            rhs[descriptor.ids[step]] =
+                (c * diagonal_first - b * diagonal_second) / determinant;
+            rhs[descriptor.ids[step + 1]] =
+                (a * diagonal_second - b * diagonal_first) / determinant;
+        }
+    }
+}
+
+__global__ void backwardSolveWaveKernel(
+    double* rhs,
+    const DeviceSolveDescriptor* factors,
+    int factor_begin,
+    int factor_count)
+{
+    __shared__ double partial_first[256];
+    __shared__ double partial_second[256];
+    const int local_index = static_cast<int>(blockIdx.x);
+    if (local_index >= factor_count) {
+        return;
+    }
+    const DeviceSolveDescriptor descriptor = factors[factor_begin + local_index];
+
+    int last = descriptor.accepted - 1;
+    while (last >= 0) {
+        int step = last;
+        if (descriptor.pivot_size[step] == 0) {
+            --step;
+        }
+        const int block_size = descriptor.pivot_size[step];
+        double sum_first = 0.0;
+        double sum_second = 0.0;
+        for (int row = step + block_size + threadIdx.x;
+             row < descriptor.order;
+             row += blockDim.x) {
+            const double value = rhs[descriptor.ids[row]];
+            sum_first += descriptor.factor[
+                row + step * descriptor.order] * value;
+            if (block_size == 2) {
+                sum_second += descriptor.factor[
+                    row + (step + 1) * descriptor.order] * value;
+            }
+        }
+        partial_first[threadIdx.x] = sum_first;
+        partial_second[threadIdx.x] = sum_second;
+        __syncthreads();
+        for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+            if (threadIdx.x < stride) {
+                partial_first[threadIdx.x] += partial_first[threadIdx.x + stride];
+                partial_second[threadIdx.x] += partial_second[threadIdx.x + stride];
+            }
+            __syncthreads();
+        }
+        if (threadIdx.x == 0) {
+            rhs[descriptor.ids[step]] -= partial_first[0];
+            if (block_size == 2) {
+                rhs[descriptor.ids[step + 1]] -= partial_second[0];
+            }
+        }
+        __syncthreads();
+        last = step - 1;
+    }
+}
+
+} // namespace
+
+DoubleGpuLdltOptions::DoubleGpuLdltOptions()
+    : batched_width_limit(64),
+      panel_size(64),
+      max_batch_nodes(256),
+      large_front_streams(4),
+      bunch_kaufman_gamma((1.0 + std::sqrt(17.0)) / 8.0),
+      absolute_pivot_tolerance(0.0),
+      relative_pivot_tolerance(32.0 * std::numeric_limits<double>::epsilon()),
+      two_by_two_tolerance(64.0 * std::numeric_limits<double>::epsilon()),
+      symmetrize_input(true)
+{
+}
+
+DoubleGpuLdltStatistics::DoubleGpuLdltStatistics()
+    : single_column_nodes(0),
+      batched_small_medium_nodes(0),
+      large_panel_nodes(0),
+      accepted_one_by_one_pivots(0),
+      accepted_two_by_two_pivots(0),
+      delayed_columns(0),
+      unresolved_root_columns(0),
+      tree_waves(0),
+      large_front_streams(0),
+      sorted_csc_fast_path(false),
+      asynchronous_memory_pool(false),
+      input_preprocessing_milliseconds(0.0),
+      front_assembly_milliseconds(0.0),
+      contribution_release_milliseconds(0.0),
+      small_medium_factorization_milliseconds(0.0),
+      large_panel_factorization_milliseconds(0.0),
+      factor_finalization_milliseconds(0.0),
+      factorization_milliseconds(0.0),
+      maximum_input_asymmetry(0.0)
+{
+}
+
+class DoubleGpuSupernodalLdltFactor::Impl {
+public:
+    explicit Impl(const DoubleGpuLdltOptions& options)
+        : options_(options),
+          n_(0),
+          complete_(false),
+          cublas_(0),
+          host_seen_generation_(0)
+    {
+        validateOptions();
+        checkCublas(cublasCreate(&cublas_), "cublasCreate");
+        // Keep FP64 input, output, and accumulation; do not reduce SGEMM to TF32.
+        checkCublas(cublasSetMathMode(cublas_, CUBLAS_PEDANTIC_MATH),
+                    "cublasSetMathMode");
+        initializeLargeFrontStreams();
+    }
+
+    ~Impl()
+    {
+        for (std::size_t i = 0; i < large_cublas_.size(); ++i) {
+            cublasDestroy(large_cublas_[i]);
+        }
+        for (std::size_t i = 0; i < large_streams_.size(); ++i) {
+            cudaStreamDestroy(large_streams_[i]);
+        }
+        if (cublas_ != 0) {
+            cublasDestroy(cublas_);
+        }
+    }
+
+    DoubleGpuLdltStatistics factorize(
+        int n,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices,
+        const std::vector<double>& values,
+        const CholmodSymbolicResult& symbolic)
+    {
+        resetNumericState();
+        validateInput(n, col_ptr, row_indices, values, symbolic);
+        n_ = n;
+        host_seen_stamp_.assign(static_cast<std::size_t>(n_), 0);
+        host_seen_generation_ = 0;
+        statistics_.large_front_streams = large_streams_.size();
+        statistics_.asynchronous_memory_pool = asynchronousMemoryPoolEnabled();
+        cudaEvent_t start = 0;
+        cudaEvent_t stop = 0;
+        checkCuda(cudaEventCreate(&start), "cudaEventCreate(start)");
+        try {
+            checkCuda(cudaEventCreate(&stop), "cudaEventCreate(stop)");
+            checkCuda(cudaEventRecord(start), "cudaEventRecord(start)");
+
+            prepareTree(symbolic);
+            global_to_local_.allocate(static_cast<std::size_t>(n_));
+            checkCuda(cudaMemsetAsync(
+                          global_to_local_.get(), 0xff,
+                          static_cast<std::size_t>(n_) * sizeof(int), 0),
+                      "initialize global-to-front position map");
+            const HostClock::time_point preprocessing_begin = HostClock::now();
+            prepareBaseEntries(n, col_ptr, row_indices, values, symbolic);
+            statistics_.input_preprocessing_milliseconds = elapsedMilliseconds(
+                preprocessing_begin, HostClock::now());
+            runTreeWaves(symbolic);
+            prepareSolveData();
+
+            checkCuda(cudaEventRecord(stop), "cudaEventRecord(stop)");
+            checkCuda(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
+            checkCuda(cudaEventElapsedTime(
+                          &statistics_.factorization_milliseconds, start, stop),
+                      "cudaEventElapsedTime");
+            cudaEventDestroy(stop);
+            cudaEventDestroy(start);
+        } catch (...) {
+            if (stop != 0) {
+                cudaEventDestroy(stop);
+            }
+            if (start != 0) {
+                cudaEventDestroy(start);
+            }
+            throw;
+        }
+
+        complete_ = statistics_.unresolved_root_columns == 0 &&
+                    acceptedVariableCount() == static_cast<std::size_t>(n_);
+        if (complete_) {
+            diagnostic_ = "factorization completed";
+        } else {
+            std::ostringstream message;
+            message << "factorization incomplete: "
+                    << statistics_.unresolved_root_columns
+                    << " root candidate columns remain delayed; accepted "
+                    << acceptedVariableCount() << " of " << n_;
+            diagnostic_ = message.str();
+        }
+        for (std::size_t node = 0; node < nodes_.size(); ++node) {
+            nodes_[node].contribution_values.reset();
+            nodes_[node].contribution_ids.reset();
+            nodes_[node].contribution_ids_host.clear();
+        }
+        return statistics_;
+    }
+
+    std::vector<double> solve(const std::vector<double>& rhs) const
+    {
+        if (!complete_) {
+            throw std::logic_error(
+                "cannot solve with an incomplete GPU LDLT factor: " + diagnostic_);
+        }
+        if (rhs.size() != static_cast<std::size_t>(n_)) {
+            throw std::invalid_argument("right-hand side size does not match the factor");
+        }
+
+        checkCuda(cudaMemcpy(
+                      solve_rhs_.get(), rhs.data(), rhs.size() * sizeof(double),
+                      cudaMemcpyHostToDevice),
+                  "copy RHS to GPU");
+
+        for (std::size_t wave = 0; wave + 1 < solve_wave_offsets_.size(); ++wave) {
+            const int begin = solve_wave_offsets_[wave];
+            const int count = solve_wave_offsets_[wave + 1] - begin;
+            if (count != 0) {
+                forwardSolveWaveKernel<<<count, 256>>>(
+                    solve_rhs_.get(), solve_descriptors_.get(), begin, count);
+            }
+        }
+        if (solve_descriptor_count_ != 0) {
+            diagonalSolveKernel<<<solve_descriptor_count_, 256>>>(
+                solve_rhs_.get(), solve_descriptors_.get(),
+                solve_descriptor_count_);
+        }
+        for (std::size_t reverse = solve_wave_offsets_.size(); reverse > 1; --reverse) {
+            const int begin = solve_wave_offsets_[reverse - 2];
+            const int count = solve_wave_offsets_[reverse - 1] - begin;
+            if (count != 0) {
+                backwardSolveWaveKernel<<<count, 256>>>(
+                    solve_rhs_.get(), solve_descriptors_.get(), begin, count);
+            }
+        }
+        checkCuda(cudaGetLastError(), "launch tree-wave GPU solve kernels");
+
+        std::vector<double> solution(rhs.size());
+        checkCuda(cudaMemcpy(
+                      solution.data(), solve_rhs_.get(), rhs.size() * sizeof(double),
+                      cudaMemcpyDeviceToHost),
+                  "copy solution from GPU");
+        return solution;
+    }
+
+    bool complete() const { return complete_; }
+    const DoubleGpuLdltStatistics& statistics() const { return statistics_; }
+    const std::string& diagnostic() const { return diagnostic_; }
+
+private:
+    struct SymmetricAccumulator {
+        SymmetricAccumulator()
+            : lower(0.0), upper(0.0), lower_count(0), upper_count(0) {}
+        double lower;
+        double upper;
+        int lower_count;
+        int upper_count;
+    };
+
+    struct BaseEntry {
+        int row;
+        int col;
+        double value;
+    };
+
+    struct NodeData {
+        NodeData()
+            : parent(-1), order(0), accepted(0), delayed(0), contribution_order(0) {}
+
+        int parent;
+        std::vector<int> children;
+        int order;
+        int accepted;
+        int delayed;
+        DeviceBuffer<double> factor_values;
+        DeviceBuffer<int> factor_ids;
+        DeviceBuffer<int> pivot_size;
+        int contribution_order;
+        std::vector<int> contribution_ids_host;
+        DeviceBuffer<double> contribution_values;
+        DeviceBuffer<int> contribution_ids;
+    };
+
+    struct FrontWork {
+        FrontWork()
+            : node(-1), order(0), candidate_count(0), accepted(0), delayed(0),
+              one_by_one(0), two_by_two(0), classification(DoubleGpuSupernodeClass::SingleColumn),
+              values_offset(0), ids_offset(0), pivot_offset(0),
+              values(0), ids(0), pivot_size(0)
+        {
+        }
+
+        int node;
+        int order;
+        int candidate_count;
+        int accepted;
+        int delayed;
+        int one_by_one;
+        int two_by_two;
+        DoubleGpuSupernodeClass classification;
+        std::vector<int> ids_host;
+        std::size_t values_offset;
+        std::size_t ids_offset;
+        std::size_t pivot_offset;
+        double* values;
+        int* ids;
+        int* pivot_size;
+    };
+
+    struct FrontBatchStorage {
+        DeviceBuffer<double> values;
+        DeviceBuffer<int> ids;
+        DeviceBuffer<int> pivot_size;
+    };
+
+    void initializeLargeFrontStreams()
+    {
+        large_streams_.resize(
+            static_cast<std::size_t>(options_.large_front_streams), 0);
+        large_cublas_.resize(large_streams_.size(), 0);
+        try {
+            for (std::size_t i = 0; i < large_streams_.size(); ++i) {
+                checkCuda(cudaStreamCreateWithFlags(
+                              &large_streams_[i], cudaStreamNonBlocking),
+                          "cudaStreamCreateWithFlags(large front)");
+                checkCublas(cublasCreate(&large_cublas_[i]),
+                            "cublasCreate(large front)");
+                checkCublas(cublasSetStream(
+                                large_cublas_[i], large_streams_[i]),
+                            "cublasSetStream(large front)");
+                checkCublas(cublasSetMathMode(
+                                large_cublas_[i], CUBLAS_PEDANTIC_MATH),
+                            "cublasSetMathMode(large front)");
+            }
+        } catch (...) {
+            for (std::size_t i = 0; i < large_cublas_.size(); ++i) {
+                if (large_cublas_[i] != 0) {
+                    cublasDestroy(large_cublas_[i]);
+                    large_cublas_[i] = 0;
+                }
+            }
+            for (std::size_t i = 0; i < large_streams_.size(); ++i) {
+                if (large_streams_[i] != 0) {
+                    cudaStreamDestroy(large_streams_[i]);
+                    large_streams_[i] = 0;
+                }
+            }
+            throw;
+        }
+    }
+
+    void validateOptions() const
+    {
+        if (options_.batched_width_limit < 2 ||
+            options_.panel_size < 2 ||
+            options_.max_batch_nodes < 1 ||
+            options_.large_front_streams < 1 ||
+            !(options_.bunch_kaufman_gamma > 0.0) ||
+            options_.absolute_pivot_tolerance < 0.0 ||
+            options_.relative_pivot_tolerance < 0.0 ||
+            options_.two_by_two_tolerance < 0.0) {
+            throw std::invalid_argument("invalid GPU LDLT options");
+        }
+    }
+
+    static void validateInput(
+        int n,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices,
+        const std::vector<double>& values,
+        const CholmodSymbolicResult& symbolic)
+    {
+        if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1) ||
+            col_ptr.empty() || col_ptr.front() != 0 ||
+            col_ptr.back() != static_cast<int>(row_indices.size()) ||
+            row_indices.size() != values.size()) {
+            throw std::invalid_argument("invalid numeric CSC matrix");
+        }
+        for (int col = 0; col < n; ++col) {
+            if (col_ptr[col] > col_ptr[col + 1]) {
+                throw std::invalid_argument("CSC column pointers are not monotonic");
+            }
+            for (int p = col_ptr[col]; p < col_ptr[col + 1]; ++p) {
+                if (row_indices[p] < 0 || row_indices[p] >= n ||
+                    !std::isfinite(values[p])) {
+                    throw std::invalid_argument("invalid CSC row or non-finite value");
+                }
+            }
+        }
+
+        const std::size_t node_count = symbolic.supernode_parent.size();
+        if (symbolic.supernode_ptr.size() != node_count + 1 ||
+            symbolic.row_ptr.size() != node_count + 1 ||
+            symbolic.supernode_ptr.empty() || symbolic.supernode_ptr.front() != 0 ||
+            symbolic.supernode_ptr.back() != n || symbolic.row_ptr.front() != 0 ||
+            symbolic.row_ptr.back() != static_cast<int>(symbolic.supernode_rows.size())) {
+            throw std::invalid_argument("invalid CHOLMOD supernode structure");
+        }
+        for (std::size_t node = 0; node < node_count; ++node) {
+            if (symbolic.supernode_ptr[node] >= symbolic.supernode_ptr[node + 1] ||
+                symbolic.row_ptr[node] > symbolic.row_ptr[node + 1] ||
+                symbolic.supernode_parent[node] >= static_cast<int>(node_count) ||
+                symbolic.supernode_parent[node] == static_cast<int>(node)) {
+                throw std::invalid_argument("invalid CHOLMOD supernode range or parent");
+            }
+        }
+    }
+
+    void resetNumericState()
+    {
+        solve_descriptors_.reset();
+        solve_rhs_.reset();
+        solve_descriptor_count_ = 0;
+        factorization_wave_ends_.clear();
+        solve_wave_offsets_.clear();
+        nodes_.clear();
+        factorization_order_.clear();
+        base_owner_ptr_.clear();
+        base_rows_.reset();
+        base_cols_.reset();
+        base_values_.reset();
+        global_to_local_.reset();
+        host_seen_stamp_.clear();
+        host_seen_generation_ = 0;
+        statistics_ = DoubleGpuLdltStatistics();
+        n_ = 0;
+        complete_ = false;
+        diagnostic_.clear();
+    }
+
+    void prepareSolveData()
+    {
+        std::vector<DeviceSolveDescriptor> descriptors;
+        descriptors.reserve(factorization_order_.size());
+        solve_wave_offsets_.clear();
+        solve_wave_offsets_.push_back(0);
+        std::size_t wave = 0;
+        for (std::size_t i = 0; i < factorization_order_.size(); ++i) {
+            const NodeData& node = nodes_[factorization_order_[i]];
+            if (node.accepted != 0) {
+                DeviceSolveDescriptor descriptor;
+                descriptor.factor = node.factor_values.get();
+                descriptor.ids = node.factor_ids.get();
+                descriptor.pivot_size = node.pivot_size.get();
+                descriptor.order = node.order;
+                descriptor.accepted = node.accepted;
+                descriptors.push_back(descriptor);
+            }
+            while (wave < factorization_wave_ends_.size() &&
+                   i + 1 == factorization_wave_ends_[wave]) {
+                solve_wave_offsets_.push_back(
+                    static_cast<int>(descriptors.size()));
+                ++wave;
+            }
+        }
+        if (solve_wave_offsets_.size() != factorization_wave_ends_.size() + 1) {
+            throw std::logic_error("invalid factorization wave boundaries");
+        }
+
+        solve_descriptor_count_ = static_cast<int>(descriptors.size());
+        solve_descriptors_.allocate(descriptors.size());
+        if (!descriptors.empty()) {
+            checkCuda(cudaMemcpyAsync(
+                          solve_descriptors_.get(), descriptors.data(),
+                          descriptors.size() * sizeof(DeviceSolveDescriptor),
+                          cudaMemcpyHostToDevice, 0),
+                      "upload persistent solve descriptors");
+        }
+        solve_rhs_.allocate(static_cast<std::size_t>(n_));
+    }
+
+    void prepareTree(const CholmodSymbolicResult& symbolic)
+    {
+        nodes_.resize(symbolic.supernode_parent.size());
+        for (std::size_t node = 0; node < nodes_.size(); ++node) {
+            nodes_[node].parent = symbolic.supernode_parent[node];
+            if (nodes_[node].parent >= 0) {
+                nodes_[static_cast<std::size_t>(nodes_[node].parent)].children.push_back(
+                    static_cast<int>(node));
+            }
+        }
+    }
+
+    static std::uint64_t symmetricKey(int row, int col)
+    {
+        const std::uint32_t high = static_cast<std::uint32_t>(std::max(row, col));
+        const std::uint32_t low = static_cast<std::uint32_t>(std::min(row, col));
+        return (static_cast<std::uint64_t>(high) << 32) | low;
+    }
+
+    static bool hasStrictlySortedUniqueRows(
+        int n,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices)
+    {
+        for (int col = 0; col < n; ++col) {
+            for (int p = col_ptr[col] + 1; p < col_ptr[col + 1]; ++p) {
+                if (row_indices[p - 1] >= row_indices[p]) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    static int findSortedCscEntry(
+        int col,
+        int target_row,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices)
+    {
+        const std::vector<int>::const_iterator begin =
+            row_indices.begin() + col_ptr[col];
+        const std::vector<int>::const_iterator end =
+            row_indices.begin() + col_ptr[col + 1];
+        const std::vector<int>::const_iterator position =
+            std::lower_bound(begin, end, target_row);
+        return position != end && *position == target_row
+            ? static_cast<int>(position - row_indices.begin()) : -1;
+    }
+
+    void prepareBaseEntries(
+        int n,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices,
+        const std::vector<double>& values,
+        const CholmodSymbolicResult& symbolic)
+    {
+        std::vector<int> column_to_node(static_cast<std::size_t>(n), -1);
+        for (std::size_t node = 0; node < nodes_.size(); ++node) {
+            for (int col = symbolic.supernode_ptr[node];
+                 col < symbolic.supernode_ptr[node + 1]; ++col) {
+                column_to_node[col] = static_cast<int>(node);
+            }
+        }
+
+        std::vector<BaseEntry> entries;
+        entries.reserve((values.size() + static_cast<std::size_t>(n)) / 2);
+        statistics_.sorted_csc_fast_path =
+            hasStrictlySortedUniqueRows(n, col_ptr, row_indices);
+        if (statistics_.sorted_csc_fast_path) {
+            for (int col = 0; col < n; ++col) {
+                for (int p = col_ptr[col]; p < col_ptr[col + 1]; ++p) {
+                    const int row = row_indices[p];
+                    BaseEntry entry;
+                    if (row < col) {
+                        if (findSortedCscEntry(
+                                row, col, col_ptr, row_indices) >= 0) {
+                            continue;
+                        }
+                        entry.row = col;
+                        entry.col = row;
+                        entry.value = values[p];
+                    } else {
+                        entry.row = row;
+                        entry.col = col;
+                        entry.value = values[p];
+                        if (row != col) {
+                            const int upper = findSortedCscEntry(
+                                row, col, col_ptr, row_indices);
+                            if (upper >= 0) {
+                                statistics_.maximum_input_asymmetry = std::max(
+                                    statistics_.maximum_input_asymmetry,
+                                    std::fabs(values[p] - values[upper]));
+                                if (options_.symmetrize_input) {
+                                    entry.value = 0.5 *
+                                        (values[p] + values[upper]);
+                                }
+                            }
+                        }
+                    }
+                    if (entry.value != 0.0) {
+                        entries.push_back(entry);
+                    }
+                }
+            }
+        } else {
+            std::unordered_map<std::uint64_t, SymmetricAccumulator> accumulated;
+            accumulated.reserve(values.size());
+            for (int col = 0; col < n; ++col) {
+                for (int p = col_ptr[col]; p < col_ptr[col + 1]; ++p) {
+                    const int row = row_indices[p];
+                    SymmetricAccumulator& accumulator =
+                        accumulated[symmetricKey(row, col)];
+                    if (row >= col) {
+                        accumulator.lower += values[p];
+                        ++accumulator.lower_count;
+                    } else {
+                        accumulator.upper += values[p];
+                        ++accumulator.upper_count;
+                    }
+                }
+            }
+            entries.reserve(accumulated.size());
+            for (std::unordered_map<std::uint64_t, SymmetricAccumulator>::const_iterator
+                     iterator = accumulated.begin();
+                 iterator != accumulated.end(); ++iterator) {
+                const SymmetricAccumulator& accumulator = iterator->second;
+                BaseEntry entry;
+                entry.row = static_cast<int>(iterator->first >> 32);
+                entry.col = static_cast<int>(iterator->first & 0xffffffffu);
+                if (entry.row == entry.col) {
+                    entry.value = accumulator.lower + accumulator.upper;
+                } else if (accumulator.lower_count != 0 &&
+                           accumulator.upper_count != 0) {
+                    statistics_.maximum_input_asymmetry = std::max(
+                        statistics_.maximum_input_asymmetry,
+                        std::fabs(accumulator.lower - accumulator.upper));
+                    entry.value = options_.symmetrize_input
+                        ? 0.5 * (accumulator.lower + accumulator.upper)
+                        : accumulator.lower;
+                } else {
+                    entry.value = accumulator.lower_count != 0
+                        ? accumulator.lower : accumulator.upper;
+                }
+                if (entry.value != 0.0) {
+                    entries.push_back(entry);
+                }
+            }
+        }
+
+        base_owner_ptr_.assign(nodes_.size() + 1, 0);
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const int owner = column_to_node[entries[i].col];
+            ++base_owner_ptr_[static_cast<std::size_t>(owner + 1)];
+        }
+        for (std::size_t node = 0; node < nodes_.size(); ++node) {
+            base_owner_ptr_[node + 1] += base_owner_ptr_[node];
+        }
+        std::vector<int> owner_cursor = base_owner_ptr_;
+        std::vector<int> host_rows(entries.size());
+        std::vector<int> host_cols(entries.size());
+        std::vector<double> host_values(entries.size());
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            const int owner = column_to_node[entries[i].col];
+            const int destination = owner_cursor[static_cast<std::size_t>(owner)]++;
+            host_rows[static_cast<std::size_t>(destination)] = entries[i].row;
+            host_cols[static_cast<std::size_t>(destination)] = entries[i].col;
+            host_values[static_cast<std::size_t>(destination)] = entries[i].value;
+        }
+
+        base_rows_.allocate(host_rows.size());
+        base_cols_.allocate(host_cols.size());
+        base_values_.allocate(host_values.size());
+        if (!host_rows.empty()) {
+            checkCuda(cudaMemcpy(
+                          base_rows_.get(), host_rows.data(), host_rows.size() * sizeof(int),
+                          cudaMemcpyHostToDevice),
+                      "upload base entry rows");
+            checkCuda(cudaMemcpy(
+                          base_cols_.get(), host_cols.data(), host_cols.size() * sizeof(int),
+                          cudaMemcpyHostToDevice),
+                      "upload base entry columns");
+            checkCuda(cudaMemcpy(
+                          base_values_.get(), host_values.data(),
+                          host_values.size() * sizeof(double), cudaMemcpyHostToDevice),
+                      "upload base entry values");
+        }
+    }
+
+    void beginFrontIdCollection()
+    {
+        if (host_seen_generation_ == std::numeric_limits<int>::max()) {
+            std::fill(host_seen_stamp_.begin(), host_seen_stamp_.end(), 0);
+            host_seen_generation_ = 1;
+        } else {
+            ++host_seen_generation_;
+        }
+    }
+
+    void appendUnique(std::vector<int>& destination, int value)
+    {
+        if (host_seen_stamp_[static_cast<std::size_t>(value)] !=
+            host_seen_generation_) {
+            host_seen_stamp_[static_cast<std::size_t>(value)] =
+                host_seen_generation_;
+            destination.push_back(value);
+        }
+    }
+
+    FrontWork prepareFront(int node_index, const CholmodSymbolicResult& symbolic)
+    {
+        FrontWork front;
+        front.node = node_index;
+        const std::size_t node = static_cast<std::size_t>(node_index);
+        const int first_col = symbolic.supernode_ptr[node];
+        const int end_col = symbolic.supernode_ptr[node + 1];
+
+        beginFrontIdCollection();
+        for (int col = first_col; col < end_col; ++col) {
+            appendUnique(front.ids_host, col);
+        }
+
+        NodeData& node_data = nodes_[node];
+        for (std::size_t child_pos = 0; child_pos < node_data.children.size(); ++child_pos) {
+            const NodeData& child = nodes_[static_cast<std::size_t>(
+                node_data.children[child_pos])];
+            for (int i = 0; i < child.delayed; ++i) {
+                appendUnique(front.ids_host, child.contribution_ids_host[i]);
+            }
+        }
+        front.candidate_count = static_cast<int>(front.ids_host.size());
+
+        for (int p = symbolic.row_ptr[node]; p < symbolic.row_ptr[node + 1]; ++p) {
+            appendUnique(front.ids_host, symbolic.supernode_rows[p]);
+        }
+        for (std::size_t child_pos = 0; child_pos < node_data.children.size(); ++child_pos) {
+            const NodeData& child = nodes_[static_cast<std::size_t>(
+                node_data.children[child_pos])];
+            for (std::size_t i = static_cast<std::size_t>(child.delayed);
+                 i < child.contribution_ids_host.size(); ++i) {
+                appendUnique(front.ids_host, child.contribution_ids_host[i]);
+            }
+        }
+        front.order = static_cast<int>(front.ids_host.size());
+
+        if (front.candidate_count == 1) {
+            front.classification = DoubleGpuSupernodeClass::SingleColumn;
+        } else if (front.candidate_count <= options_.batched_width_limit) {
+            front.classification = DoubleGpuSupernodeClass::BatchedSmallMedium;
+        } else {
+            front.classification = DoubleGpuSupernodeClass::LargePanel;
+        }
+
+        return front;
+    }
+
+    void assembleFront(FrontWork& front)
+    {
+        const std::size_t node = static_cast<std::size_t>(front.node);
+        NodeData& node_data = nodes_[node];
+
+        const int position_blocks = (front.order + 255) / 256;
+        setFrontPositionsKernel<<<position_blocks, 256>>>(
+            front.ids, front.order, global_to_local_.get());
+
+        const int base_begin = base_owner_ptr_[node];
+        const int base_end = base_owner_ptr_[node + 1];
+        if (base_begin != base_end) {
+            const int blocks = (base_end - base_begin + 255) / 256;
+            scatterBaseEntriesKernel<<<blocks, 256>>>(
+                front.values, front.order,
+                global_to_local_.get(),
+                base_rows_.get(), base_cols_.get(), base_values_.get(),
+                base_begin, base_end);
+        }
+
+        for (std::size_t child_pos = 0; child_pos < node_data.children.size(); ++child_pos) {
+            const NodeData& child = nodes_[static_cast<std::size_t>(
+                node_data.children[child_pos])];
+            if (child.contribution_order == 0) {
+                continue;
+            }
+            const int total = child.contribution_order * child.contribution_order;
+            extendAddKernel<<<(total + 255) / 256, 256>>>(
+                front.values, front.order,
+                global_to_local_.get(),
+                child.contribution_values.get(), child.contribution_ids.get(),
+                child.contribution_order);
+        }
+        clearFrontPositionsKernel<<<position_blocks, 256>>>(
+            front.ids, front.order, global_to_local_.get());
+        checkCuda(cudaGetLastError(), "assemble frontal matrix on GPU");
+    }
+
+    FrontBatchStorage materializeFrontBatch(std::vector<FrontWork>& fronts)
+    {
+        FrontBatchStorage storage;
+        std::size_t value_count = 0;
+        std::size_t id_count = 0;
+        std::size_t pivot_count = 0;
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            fronts[i].values_offset = value_count;
+            fronts[i].ids_offset = id_count;
+            fronts[i].pivot_offset = pivot_count;
+            value_count += static_cast<std::size_t>(fronts[i].order) *
+                static_cast<std::size_t>(fronts[i].order);
+            id_count += static_cast<std::size_t>(fronts[i].order);
+            pivot_count += static_cast<std::size_t>(fronts[i].candidate_count);
+        }
+
+        storage.values.allocate(value_count);
+        storage.ids.allocate(id_count);
+        storage.pivot_size.allocate(pivot_count);
+        checkCuda(cudaMemsetAsync(
+                      storage.values.get(), 0, value_count * sizeof(double), 0),
+                  "clear batched frontal matrices");
+        checkCuda(cudaMemsetAsync(
+                      storage.pivot_size.get(), 0, pivot_count * sizeof(int), 0),
+                  "clear batched pivot block sizes");
+
+        front_ids_upload_.reserve(id_count);
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            std::copy(fronts[i].ids_host.begin(), fronts[i].ids_host.end(),
+                      front_ids_upload_.get() + fronts[i].ids_offset);
+            fronts[i].values = storage.values.get() + fronts[i].values_offset;
+            fronts[i].ids = storage.ids.get() + fronts[i].ids_offset;
+            fronts[i].pivot_size =
+                storage.pivot_size.get() + fronts[i].pivot_offset;
+        }
+        checkCuda(cudaMemcpyAsync(
+                      storage.ids.get(), front_ids_upload_.get(),
+                      id_count * sizeof(int), cudaMemcpyHostToDevice, 0),
+                  "upload batched front IDs");
+
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            assembleFront(fronts[i]);
+        }
+        return storage;
+    }
+
+    DeviceFrontDescriptor makeDescriptor(FrontWork& front) const
+    {
+        DeviceFrontDescriptor descriptor;
+        descriptor.values = front.values;
+        descriptor.ids = front.ids;
+        descriptor.pivot_size = front.pivot_size;
+        descriptor.order = front.order;
+        descriptor.candidate_count = front.candidate_count;
+        descriptor.gamma = options_.bunch_kaufman_gamma;
+        descriptor.absolute_tolerance = options_.absolute_pivot_tolerance;
+        descriptor.relative_tolerance = options_.relative_pivot_tolerance;
+        descriptor.two_by_two_tolerance = options_.two_by_two_tolerance;
+        descriptor.accepted = 0;
+        descriptor.delayed = 0;
+        descriptor.one_by_one = 0;
+        descriptor.two_by_two = 0;
+        return descriptor;
+    }
+
+    void factorBatch(
+        std::vector<FrontWork>& fronts,
+        const std::vector<int>& front_indices,
+        bool single)
+    {
+        if (front_indices.empty()) {
+            return;
+        }
+        std::vector<DeviceFrontDescriptor> host_descriptors;
+        host_descriptors.reserve(front_indices.size());
+        for (std::size_t i = 0; i < front_indices.size(); ++i) {
+            host_descriptors.push_back(makeDescriptor(fronts[front_indices[i]]));
+        }
+        DeviceBuffer<DeviceFrontDescriptor> device_descriptors(host_descriptors.size());
+        checkCuda(cudaMemcpy(
+                      device_descriptors.get(), host_descriptors.data(),
+                      host_descriptors.size() * sizeof(DeviceFrontDescriptor),
+                      cudaMemcpyHostToDevice),
+                  "upload batch descriptors");
+
+        if (single) {
+            factorSingleColumnKernel<<<static_cast<unsigned int>(host_descriptors.size()), 256>>>(
+                device_descriptors.get());
+        } else {
+            factorSmallMediumKernel<<<static_cast<unsigned int>(host_descriptors.size()), 256>>>(
+                device_descriptors.get());
+        }
+        checkCuda(cudaGetLastError(), "launch batched BK factorization");
+        checkCuda(cudaMemcpy(
+                      host_descriptors.data(), device_descriptors.get(),
+                      host_descriptors.size() * sizeof(DeviceFrontDescriptor),
+                      cudaMemcpyDeviceToHost),
+                  "download batch results");
+
+        for (std::size_t i = 0; i < front_indices.size(); ++i) {
+            FrontWork& front = fronts[front_indices[i]];
+            front.accepted = host_descriptors[i].accepted;
+            front.delayed = host_descriptors[i].delayed;
+            front.one_by_one = host_descriptors[i].one_by_one;
+            front.two_by_two = host_descriptors[i].two_by_two;
+        }
+    }
+
+    void flushLargePanel(
+        FrontWork& front,
+        DeviceBuffer<double>& work,
+        int panel_begin,
+        int step,
+        cudaStream_t stream,
+        cublasHandle_t cublas) const
+    {
+        const int panel_columns = step - panel_begin;
+        const int remaining = front.order - step;
+        if (panel_columns <= 0 || remaining <= 0) {
+            return;
+        }
+        const double alpha = -1.0;
+        const double beta = 1.0;
+        checkCublas(cublasDgemm(
+                        cublas, CUBLAS_OP_N, CUBLAS_OP_T,
+                        remaining, remaining, panel_columns,
+                        &alpha,
+                        front.values + step + panel_begin * front.order,
+                        front.order,
+                        work.get() + step,
+                        front.order,
+                        &beta,
+                        front.values + step + step * front.order,
+                        front.order),
+                    "flush large BK panel with SGEMM");
+        const int total = remaining * remaining;
+        mirrorLowerToUpperKernel<<<(total + 255) / 256, 256, 0, stream>>>(
+            front.values, front.order, step);
+        checkCuda(cudaGetLastError(), "mirror SGEMM Schur update");
+    }
+
+    void factorLarge(
+        FrontWork& front,
+        cudaStream_t stream,
+        cublasHandle_t cublas)
+    {
+        DeviceBuffer<double> work(
+            static_cast<std::size_t>(front.order) * options_.panel_size,
+            stream);
+        DeviceBuffer<DeviceLargePanelState> device_state(1, stream);
+        checkCuda(cudaMemsetAsync(
+                      work.get(), 0,
+                      static_cast<std::size_t>(front.order) * options_.panel_size *
+                          sizeof(double), stream),
+                  "clear large-panel work array");
+
+        int step = 0;
+        int active_end = front.candidate_count;
+        int delay_first = 0;
+
+        while (step < active_end) {
+            const int panel_begin = step;
+            factorLargePanelControlKernel<<<1, 256, 0, stream>>>(
+                front.values, work.get(), front.ids,
+                front.pivot_size, front.order, panel_begin, active_end,
+                delay_first, options_.panel_size, options_.bunch_kaufman_gamma,
+                options_.absolute_pivot_tolerance,
+                options_.relative_pivot_tolerance,
+                options_.two_by_two_tolerance, device_state.get());
+            checkCuda(cudaGetLastError(), "launch GPU-resident large BK panel");
+
+            DeviceLargePanelState host_state;
+            checkCuda(cudaMemcpyAsync(
+                          &host_state, device_state.get(), sizeof(host_state),
+                          cudaMemcpyDeviceToHost, stream),
+                      "download large-panel summary");
+            checkCuda(cudaStreamSynchronize(stream),
+                      "wait for large-panel summary");
+            if (host_state.step < panel_begin ||
+                host_state.active_end > active_end ||
+                host_state.active_end < host_state.step ||
+                host_state.panel_columns != host_state.step - panel_begin ||
+                (host_state.delay_current != 0 &&
+                 host_state.delay_current != 1)) {
+                throw std::runtime_error("invalid GPU large-panel state");
+            }
+
+            step = host_state.step;
+            active_end = host_state.active_end;
+            front.one_by_one += host_state.one_by_one;
+            front.two_by_two += host_state.two_by_two;
+            delay_first = host_state.delay_current;
+            if (host_state.panel_columns != 0) {
+                flushLargePanel(
+                    front, work, panel_begin, step, stream, cublas);
+            }
+        }
+
+        front.accepted = step;
+        front.delayed = front.candidate_count - step;
+        checkCuda(cudaStreamSynchronize(stream),
+                  "finish concurrent large front");
+    }
+
+    void factorLargeFronts(
+        std::vector<FrontWork>& fronts,
+        const std::vector<int>& large)
+    {
+        if (large.empty()) {
+            return;
+        }
+        const std::size_t worker_count = std::min(
+            large_streams_.size(), large.size());
+        std::atomic<std::size_t> next(0);
+        std::vector<std::exception_ptr> failures(worker_count);
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count);
+        for (std::size_t slot = 0; slot < worker_count; ++slot) {
+            workers.push_back(std::thread([&, slot]() {
+                try {
+                    while (true) {
+                        const std::size_t index = next.fetch_add(1);
+                        if (index >= large.size()) {
+                            break;
+                        }
+                        factorLarge(
+                            fronts[large[index]],
+                            large_streams_[slot], large_cublas_[slot]);
+                    }
+                } catch (...) {
+                    failures[slot] = std::current_exception();
+                }
+            }));
+        }
+        for (std::size_t slot = 0; slot < workers.size(); ++slot) {
+            workers[slot].join();
+        }
+        for (std::size_t slot = 0; slot < worker_count; ++slot) {
+            if (failures[slot]) {
+                std::rethrow_exception(failures[slot]);
+            }
+        }
+    }
+
+    void finalizeFront(FrontWork& front)
+    {
+        const std::size_t node_index = static_cast<std::size_t>(front.node);
+        NodeData& node = nodes_[node_index];
+        node.order = front.order;
+        node.accepted = front.accepted;
+        node.delayed = front.delayed;
+
+        if (front.accepted != 0) {
+            node.factor_values.allocate(
+                static_cast<std::size_t>(front.order) * front.accepted);
+            node.factor_ids.allocate(static_cast<std::size_t>(front.order));
+            node.pivot_size.allocate(static_cast<std::size_t>(front.accepted));
+            checkCuda(cudaMemcpyAsync(
+                          node.factor_values.get(), front.values,
+                          static_cast<std::size_t>(front.order) * front.accepted *
+                              sizeof(double),
+                          cudaMemcpyDeviceToDevice, 0),
+                      "save GPU supernode factor");
+            checkCuda(cudaMemcpyAsync(
+                          node.factor_ids.get(), front.ids,
+                          static_cast<std::size_t>(front.order) * sizeof(int),
+                          cudaMemcpyDeviceToDevice, 0),
+                      "save factor IDs");
+            checkCuda(cudaMemcpyAsync(
+                          node.pivot_size.get(), front.pivot_size,
+                          static_cast<std::size_t>(front.accepted) * sizeof(int),
+                          cudaMemcpyDeviceToDevice, 0),
+                      "save pivot block sizes");
+        }
+
+        node.contribution_order = front.order - front.accepted;
+        node.contribution_ids_host.assign(
+            front.ids_host.begin() + front.accepted, front.ids_host.end());
+        if (node.contribution_order != 0) {
+            node.contribution_values.allocate(
+                static_cast<std::size_t>(node.contribution_order) *
+                node.contribution_order);
+            node.contribution_ids.allocate(
+                static_cast<std::size_t>(node.contribution_order));
+            const int total = node.contribution_order * node.contribution_order;
+            extractContributionKernel<<<(total + 255) / 256, 256>>>(
+                front.values, front.order, front.accepted,
+                node.contribution_values.get(), node.contribution_order);
+            checkCuda(cudaMemcpyAsync(
+                          node.contribution_ids.get(),
+                          front.ids + front.accepted,
+                          static_cast<std::size_t>(node.contribution_order) * sizeof(int),
+                          cudaMemcpyDeviceToDevice, 0),
+                      "save contribution IDs");
+        }
+        checkCuda(cudaGetLastError(), "extract child contribution");
+
+        statistics_.accepted_one_by_one_pivots +=
+            static_cast<std::size_t>(front.one_by_one);
+        statistics_.accepted_two_by_two_pivots +=
+            static_cast<std::size_t>(front.two_by_two);
+        statistics_.delayed_columns += static_cast<std::size_t>(front.delayed);
+        if (node.parent < 0) {
+            statistics_.unresolved_root_columns +=
+                static_cast<std::size_t>(front.delayed);
+        }
+        factorization_order_.push_back(front.node);
+    }
+
+    void downloadFrontIds(std::vector<FrontWork>& fronts)
+    {
+        if (fronts.empty()) {
+            return;
+        }
+
+        std::vector<DeviceFrontIdCopy> host_copies(fronts.size());
+        std::size_t total_ids = 0;
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            host_copies[i].source = fronts[i].ids;
+            host_copies[i].destination_offset = total_ids;
+            host_copies[i].count = fronts[i].order;
+            total_ids += static_cast<std::size_t>(fronts[i].order);
+        }
+
+        DeviceBuffer<DeviceFrontIdCopy> device_copies(host_copies.size());
+        DeviceBuffer<int> packed_device_ids(total_ids);
+        std::vector<int> packed_host_ids(total_ids);
+        checkCuda(cudaMemcpyAsync(
+                      device_copies.get(), host_copies.data(),
+                      host_copies.size() * sizeof(DeviceFrontIdCopy),
+                      cudaMemcpyHostToDevice, 0),
+                  "upload batched front-ID copy descriptors");
+        packFrontIdsKernel<<<static_cast<unsigned int>(fronts.size()), 256>>>(
+            device_copies.get(), static_cast<int>(fronts.size()),
+            packed_device_ids.get());
+        checkCuda(cudaGetLastError(), "pack permuted front IDs");
+        checkCuda(cudaMemcpy(
+                      packed_host_ids.data(), packed_device_ids.get(),
+                      total_ids * sizeof(int), cudaMemcpyDeviceToHost),
+                  "download batched permuted front IDs");
+
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            const std::size_t begin = host_copies[i].destination_offset;
+            fronts[i].ids_host.assign(
+                packed_host_ids.begin() + begin,
+                packed_host_ids.begin() + begin +
+                    static_cast<std::size_t>(host_copies[i].count));
+        }
+    }
+
+    void releaseConsumedChildContributions(const std::vector<int>& wave)
+    {
+        checkCuda(cudaDeviceSynchronize(), "finish wave contribution assembly");
+        for (std::size_t i = 0; i < wave.size(); ++i) {
+            NodeData& parent = nodes_[static_cast<std::size_t>(wave[i])];
+            for (std::size_t child_pos = 0; child_pos < parent.children.size(); ++child_pos) {
+                NodeData& child = nodes_[static_cast<std::size_t>(
+                    parent.children[child_pos])];
+                child.contribution_values.reset();
+                child.contribution_ids.reset();
+            }
+        }
+    }
+
+    void runTreeWaves(const CholmodSymbolicResult& symbolic)
+    {
+        std::vector<int> pending_children(nodes_.size(), 0);
+        std::vector<int> ready;
+        for (std::size_t node = 0; node < nodes_.size(); ++node) {
+            pending_children[node] = static_cast<int>(nodes_[node].children.size());
+            if (pending_children[node] == 0) {
+                ready.push_back(static_cast<int>(node));
+            }
+        }
+
+        std::size_t processed = 0;
+        while (!ready.empty()) {
+            ++statistics_.tree_waves;
+            std::vector<int> wave;
+            wave.swap(ready);
+
+            const std::size_t batch_limit =
+                static_cast<std::size_t>(options_.max_batch_nodes);
+            for (std::size_t batch_begin = 0;
+                 batch_begin < wave.size(); batch_begin += batch_limit) {
+                const std::size_t batch_end = std::min(
+                    wave.size(), batch_begin + batch_limit);
+                std::vector<int> batch_nodes(
+                    wave.begin() + batch_begin, wave.begin() + batch_end);
+                std::vector<FrontWork> fronts;
+                fronts.reserve(batch_nodes.size());
+                const HostClock::time_point assembly_begin = HostClock::now();
+                for (std::size_t i = 0; i < batch_nodes.size(); ++i) {
+                    fronts.push_back(prepareFront(batch_nodes[i], symbolic));
+                }
+                FrontBatchStorage front_storage = materializeFrontBatch(fronts);
+                (void)front_storage;
+                statistics_.front_assembly_milliseconds += elapsedMilliseconds(
+                    assembly_begin, HostClock::now());
+
+                const HostClock::time_point release_begin = HostClock::now();
+                releaseConsumedChildContributions(batch_nodes);
+                statistics_.contribution_release_milliseconds += elapsedMilliseconds(
+                    release_begin, HostClock::now());
+
+                std::vector<int> singles;
+                std::vector<int> medium;
+                std::vector<int> large;
+                for (std::size_t i = 0; i < fronts.size(); ++i) {
+                    switch (fronts[i].classification) {
+                        case DoubleGpuSupernodeClass::SingleColumn:
+                            singles.push_back(static_cast<int>(i));
+                            ++statistics_.single_column_nodes;
+                            break;
+                        case DoubleGpuSupernodeClass::BatchedSmallMedium:
+                            medium.push_back(static_cast<int>(i));
+                            ++statistics_.batched_small_medium_nodes;
+                            break;
+                        case DoubleGpuSupernodeClass::LargePanel:
+                            large.push_back(static_cast<int>(i));
+                            ++statistics_.large_panel_nodes;
+                            break;
+                    }
+                }
+
+                const HostClock::time_point small_medium_begin = HostClock::now();
+                factorBatch(fronts, singles, true);
+                factorBatch(fronts, medium, false);
+                statistics_.small_medium_factorization_milliseconds +=
+                    elapsedMilliseconds(small_medium_begin, HostClock::now());
+
+                const HostClock::time_point large_begin = HostClock::now();
+                factorLargeFronts(fronts, large);
+                statistics_.large_panel_factorization_milliseconds +=
+                    elapsedMilliseconds(large_begin, HostClock::now());
+
+                const HostClock::time_point finalization_begin = HostClock::now();
+                downloadFrontIds(fronts);
+                for (std::size_t i = 0; i < fronts.size(); ++i) {
+                    finalizeFront(fronts[i]);
+                    ++processed;
+                }
+                statistics_.factor_finalization_milliseconds +=
+                    elapsedMilliseconds(finalization_begin, HostClock::now());
+            }
+
+            for (std::size_t i = 0; i < wave.size(); ++i) {
+                const int parent = nodes_[static_cast<std::size_t>(wave[i])].parent;
+                if (parent >= 0) {
+                    int& count = pending_children[static_cast<std::size_t>(parent)];
+                    --count;
+                    if (count == 0) {
+                        ready.push_back(parent);
+                    }
+                }
+            }
+            factorization_wave_ends_.push_back(factorization_order_.size());
+        }
+
+        if (processed != nodes_.size()) {
+            throw std::runtime_error("the supernode parent relation contains a cycle");
+        }
+    }
+
+    std::size_t acceptedVariableCount() const
+    {
+        std::size_t count = 0;
+        for (std::size_t node = 0; node < nodes_.size(); ++node) {
+            count += static_cast<std::size_t>(nodes_[node].accepted);
+        }
+        return count;
+    }
+
+    DoubleGpuLdltOptions options_;
+    int n_;
+    bool complete_;
+    DoubleGpuLdltStatistics statistics_;
+    std::string diagnostic_;
+    cublasHandle_t cublas_;
+    std::vector<NodeData> nodes_;
+    std::vector<int> factorization_order_;
+    std::vector<std::size_t> factorization_wave_ends_;
+    std::vector<int> solve_wave_offsets_;
+    DeviceBuffer<DeviceSolveDescriptor> solve_descriptors_;
+    mutable DeviceBuffer<double> solve_rhs_;
+    int solve_descriptor_count_ = 0;
+    std::vector<int> base_owner_ptr_;
+    DeviceBuffer<int> base_rows_;
+    DeviceBuffer<int> base_cols_;
+    DeviceBuffer<double> base_values_;
+    DeviceBuffer<int> global_to_local_;
+    ReusablePinnedBuffer<int> front_ids_upload_;
+    std::vector<int> host_seen_stamp_;
+    int host_seen_generation_;
+    std::vector<cudaStream_t> large_streams_;
+    std::vector<cublasHandle_t> large_cublas_;
+};
+
+DoubleGpuSupernodalLdltFactor::DoubleGpuSupernodalLdltFactor(const DoubleGpuLdltOptions& options)
+    : impl_(new Impl(options))
+{
+}
+
+DoubleGpuSupernodalLdltFactor::~DoubleGpuSupernodalLdltFactor() = default;
+
+DoubleGpuSupernodalLdltFactor::DoubleGpuSupernodalLdltFactor(
+    DoubleGpuSupernodalLdltFactor&& other) noexcept = default;
+
+DoubleGpuSupernodalLdltFactor& DoubleGpuSupernodalLdltFactor::operator=(
+    DoubleGpuSupernodalLdltFactor&& other) noexcept = default;
+
+DoubleGpuLdltStatistics DoubleGpuSupernodalLdltFactor::factorize(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices,
+    const std::vector<double>& values,
+    const CholmodSymbolicResult& symbolic)
+{
+    return impl_->factorize(n, col_ptr, row_indices, values, symbolic);
+}
+
+std::vector<double> DoubleGpuSupernodalLdltFactor::solve(
+    const std::vector<double>& reordered_rhs) const
+{
+    return impl_->solve(reordered_rhs);
+}
+
+bool DoubleGpuSupernodalLdltFactor::complete() const
+{
+    return impl_->complete();
+}
+
+const DoubleGpuLdltStatistics& DoubleGpuSupernodalLdltFactor::statistics() const
+{
+    return impl_->statistics();
+}
+
+const std::string& DoubleGpuSupernodalLdltFactor::diagnostic() const
+{
+    return impl_->diagnostic();
+}

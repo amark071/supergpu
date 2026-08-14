@@ -7,6 +7,7 @@ struct UnsymmetricAppFiles {
     std::string input_filename;
     std::string ordered_output_filename;
     bool matching_enabled = true;
+    bool input_is_binary_csc = false;
 };
 
 int runUnsymmetricGpuApplication(

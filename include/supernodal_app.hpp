@@ -8,6 +8,7 @@ struct SupernodalAppFiles {
     std::string ordered_output_filename;
     std::string symbolic_cache_filename;
     std::string visualization_directory;
+    bool input_is_binary_csc = false;
 };
 
 // Application entry point kept separate from main() so the executable driver

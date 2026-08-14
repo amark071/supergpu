@@ -35,12 +35,20 @@ bool requestedOrderedExport(int argc, char** argv)
     return false;
 }
 
-InputMatrix loadMatrix(const std::string& filename)
+InputMatrix loadMatrix(
+    const std::string& filename,
+    bool input_is_binary_csc)
 {
     InputMatrix matrix;
-    readCSCMatrix(
-        filename, matrix.n, matrix.declared_nonzeros,
-        matrix.row_indices, matrix.col_ptr, matrix.values);
+    if (input_is_binary_csc) {
+        readBinaryCSCMatrix(
+            filename, matrix.n, matrix.declared_nonzeros,
+            matrix.row_indices, matrix.col_ptr, matrix.values);
+    } else {
+        readCSCMatrix(
+            filename, matrix.n, matrix.declared_nonzeros,
+            matrix.row_indices, matrix.col_ptr, matrix.values);
+    }
     return matrix;
 }
 
@@ -146,7 +154,8 @@ int runUnsymmetricGpuApplication(
     const UnsymmetricAppFiles& files)
 {
     try {
-        const InputMatrix input = loadMatrix(files.input_filename);
+        const InputMatrix input = loadMatrix(
+            files.input_filename, files.input_is_binary_csc);
         const std::chrono::steady_clock::time_point ordering_begin =
             std::chrono::steady_clock::now();
         const UnsymmetricOrdering ordering = files.matching_enabled

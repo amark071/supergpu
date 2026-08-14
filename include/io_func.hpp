@@ -4,13 +4,7 @@
 #include <string>
 #include <vector>
 
-/** @brief 读取1-based COO文件，并转换为0-based内存数据 */
-void readCooMatrix(const std::string& filename,
-                   std::vector<int>& rows,
-                   std::vector<int>& cols,
-                   std::vector<float>& vals);
-
-/** @brief 读取1-based CSC文件，并转换为0-based内存数据 */
+/** @brief 读取项目原有的1-based文本CSC文件，转换为0-based内存数据 */
 void readCSCMatrix(const std::string& filename,
                    int& n,
                    int& nnz,
@@ -18,21 +12,25 @@ void readCSCMatrix(const std::string& filename,
                    std::vector<int>& col_ptr,
                    std::vector<float>& values);
 
-/** @brief 将0-based CSC矩阵写成与A_1215.dat兼容的1-based文件 */
+/**
+ * @brief 读取二进制CSC文件并转换为求解器使用的int/float CSC。
+ *
+ * 文件依次存储int8稀疏标志、int32列数、int32行数、8字节nnz、
+ * int64列指针、int32行号和double数值。8字节nnz兼容int64以及保存整数的
+ * double；读取器通过完整文件长度进行无歧义校验。
+ */
+void readBinaryCSCMatrix(const std::string& filename,
+                         int& n,
+                         int& nnz,
+                         std::vector<int>& row_indices,
+                         std::vector<int>& col_ptr,
+                         std::vector<float>& values);
+
+/** @brief 将0-based CSC矩阵写成与A_1215.dat兼容的1-based文本文件 */
 void writeCSCMatrix(const std::string& filename,
                     int n,
                     const std::vector<int>& row_indices,
                     const std::vector<int>& col_ptr,
                     const std::vector<float>& values);
-
-/** @brief 将0-based CSC矩阵转换为0-based COO矩阵 */
-void csc_to_coo(int n,
-                int nnz,
-                const std::vector<int>& col_ptr,
-                const std::vector<int>& row_indices,
-                const std::vector<float>& values_csc,
-                std::vector<int>& rows_coo,
-                std::vector<int>& cols_coo,
-                std::vector<float>& values_coo);
 
 #endif
