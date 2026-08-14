@@ -1,5 +1,6 @@
 #include "gpu_supernodal_lu.hpp"
 #include "unsymmetric_ordering.hpp"
+#include "unsymmetric_refinement.hpp"
 #include "unsymmetric_symbolic.hpp"
 
 #include <algorithm>
@@ -200,6 +201,25 @@ int main()
     if (!band_factor.complete() || band_residual > 5.0e-4f ||
         band_solution.size() != band_expected.size()) {
         return 5;
+    }
+    std::vector<float> band_original_rhs(
+        static_cast<std::size_t>(band_n), 0.0f);
+    for (int row = 0; row < band_n; ++row) {
+        for (int col = 0; col < band_n; ++col) {
+            band_original_rhs[static_cast<std::size_t>(row)] +=
+                band_dense[static_cast<std::size_t>(row + col * band_n)];
+        }
+    }
+    const UnsymmetricRefinementResult band_refined =
+        solveGeneralWithIterativeRefinement(
+            band_n, band_col_ptr, band_rows, band_values,
+            band_original_rhs, band_ordering, band_factor);
+    const float refined_residual = residualInfinity(
+        band_dense, band_refined.solution, band_original_rhs);
+    std::cout << "iteratively refined LU FP32 residual infinity norm = "
+              << refined_residual << '\n';
+    if (refined_residual > 5.0e-4f) {
+        return 9;
     }
 
     // Width 65 selects the cuBLAS TRSM/GEMM panel path.

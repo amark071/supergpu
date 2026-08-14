@@ -60,6 +60,38 @@ std::vector<float> generalMatrixVectorProduct(
     return result;
 }
 
+std::vector<float> generalResidual(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices,
+    const std::vector<float>& values,
+    const std::vector<float>& rhs,
+    const std::vector<float>& solution)
+{
+    if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1) ||
+        row_indices.size() != values.size() ||
+        rhs.size() != static_cast<std::size_t>(n) ||
+        solution.size() != static_cast<std::size_t>(n)) {
+        throw std::invalid_argument("invalid general residual input");
+    }
+    std::vector<double> residual(rhs.begin(), rhs.end());
+    for (int col = 0; col < n; ++col) {
+        const double x = solution[static_cast<std::size_t>(col)];
+        for (int p = col_ptr[static_cast<std::size_t>(col)];
+             p < col_ptr[static_cast<std::size_t>(col + 1)]; ++p) {
+            const int row = row_indices[static_cast<std::size_t>(p)];
+            residual[static_cast<std::size_t>(row)] -=
+                static_cast<double>(values[static_cast<std::size_t>(p)]) * x;
+        }
+    }
+    std::vector<float> result(static_cast<std::size_t>(n));
+    for (int row = 0; row < n; ++row) {
+        result[static_cast<std::size_t>(row)] =
+            static_cast<float>(residual[static_cast<std::size_t>(row)]);
+    }
+    return result;
+}
+
 ResidualVerification verifyGeneralSolution(
     int n,
     const std::vector<int>& col_ptr,

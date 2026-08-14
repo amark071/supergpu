@@ -163,6 +163,18 @@ set_target_properties(gpu_supernodal_lu PROPERTIES
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
+add_library(unsymmetric_refinement STATIC
+    utils/unsymmetric_refinement.cpp
+)
+target_include_directories(unsymmetric_refinement
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(unsymmetric_refinement
+    PUBLIC
+        gpu_supernodal_lu unsymmetric_ordering unsymmetric_verification
+)
+target_compile_features(unsymmetric_refinement PUBLIC cxx_std_14)
+
 add_executable(supernodal_gpu
     main.cpp
     src/supernodal_app.cpp
@@ -175,7 +187,7 @@ target_link_libraries(supernodal_gpu
     PRIVATE
         io_func ordering cholmod_symbolic gpu_supernodal_ldlt
         unsymmetric_ordering unsymmetric_symbolic
-        unsymmetric_verification gpu_supernodal_lu
+        unsymmetric_verification unsymmetric_refinement gpu_supernodal_lu
 )
 target_compile_features(supernodal_gpu PRIVATE cxx_std_14)
 
@@ -190,7 +202,8 @@ if(SUPERNODAL_BUILD_TESTS)
     add_executable(gpu_lu_smoke tests/gpu_lu_smoke.cu)
     target_link_libraries(gpu_lu_smoke
         PRIVATE
-            gpu_supernodal_lu unsymmetric_ordering unsymmetric_symbolic)
+            gpu_supernodal_lu unsymmetric_ordering unsymmetric_symbolic
+            unsymmetric_refinement)
     target_compile_features(gpu_lu_smoke PRIVATE cxx_std_14 cuda_std_14)
     add_test(NAME gpu_lu_smoke COMMAND gpu_lu_smoke)
 
@@ -295,6 +308,7 @@ set(PROJECT_WARNING_TARGETS
     unsymmetric_symbolic
     unsymmetric_verification
     gpu_supernodal_lu
+    unsymmetric_refinement
     supernodal_gpu
 )
 if(TARGET gpu_ldlt_smoke)

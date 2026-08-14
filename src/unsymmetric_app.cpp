@@ -3,6 +3,7 @@
 #include "gpu_supernodal_lu.hpp"
 #include "io_func.hpp"
 #include "unsymmetric_ordering.hpp"
+#include "unsymmetric_refinement.hpp"
 #include "unsymmetric_symbolic.hpp"
 #include "unsymmetric_verification.hpp"
 
@@ -41,30 +42,6 @@ InputMatrix loadMatrix(const std::string& filename)
         filename, matrix.n, matrix.declared_nonzeros,
         matrix.row_indices, matrix.col_ptr, matrix.values);
     return matrix;
-}
-
-std::vector<float> permuteRightHandSide(
-    const std::vector<float>& rhs,
-    const UnsymmetricOrdering& ordering)
-{
-    std::vector<float> result(rhs.size(), 0.0f);
-    for (std::size_t new_row = 0; new_row < result.size(); ++new_row) {
-        result[new_row] = rhs[static_cast<std::size_t>(
-            ordering.row_perm[new_row])] * ordering.row_scale[new_row];
-    }
-    return result;
-}
-
-std::vector<float> restoreColumnOrder(
-    const std::vector<float>& ordered_solution,
-    const UnsymmetricOrdering& ordering)
-{
-    std::vector<float> result(ordered_solution.size(), 0.0f);
-    for (std::size_t new_col = 0; new_col < result.size(); ++new_col) {
-        result[static_cast<std::size_t>(ordering.perm[new_col])] =
-            ordering.col_scale[new_col] * ordered_solution[new_col];
-    }
-    return result;
 }
 
 void printSymbolicReport(
@@ -127,7 +104,10 @@ void printFactorReport(
     std::cout << "GPU general LU status = " << factor.diagnostic() << '\n';
 }
 
-bool printVerification(const ResidualVerification& result, float solve_ms)
+bool printVerification(
+    const ResidualVerification& result,
+    float solve_ms,
+    const UnsymmetricRefinementResult& refinement)
 {
     const float tolerance = std::sqrt(std::numeric_limits<float>::epsilon());
     const bool passed = std::isfinite(result.scaled_backward_error) &&
@@ -135,6 +115,10 @@ bool printVerification(const ResidualVerification& result, float solve_ms)
     std::cout << std::scientific << std::setprecision(8);
     std::cout << "Unsymmetric solve verification x_true = all ones\n";
     std::cout << "Unsymmetric solve time (ms) = " << solve_ms << '\n';
+    std::cout << "Unsymmetric iterative refinement steps = "
+              << refinement.correction_steps << '\n';
+    std::cout << "Initial residual before refinement = "
+              << refinement.initial_residual_norm << '\n';
     std::cout << "Absolute residual ||A*x-b||_inf = "
               << result.absolute_residual << '\n';
     std::cout << "Scaled backward error = "
@@ -199,19 +183,18 @@ int runUnsymmetricGpuApplication(
         const std::vector<float> rhs = generalMatrixVectorProduct(
             input.n, input.col_ptr, input.row_indices,
             input.values, expected, 0);
-        const std::vector<float> ordered_rhs =
-            permuteRightHandSide(rhs, ordering);
         const std::chrono::steady_clock::time_point solve_begin =
             std::chrono::steady_clock::now();
-        const std::vector<float> ordered_solution = factor.solve(ordered_rhs);
-        const std::vector<float> solution =
-            restoreColumnOrder(ordered_solution, ordering);
+        const UnsymmetricRefinementResult refined =
+            solveGeneralWithIterativeRefinement(
+                input.n, input.col_ptr, input.row_indices,
+                input.values, rhs, ordering, factor);
         const float solve_ms = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - solve_begin).count();
         const ResidualVerification verification = verifyGeneralSolution(
             input.n, input.col_ptr, input.row_indices, input.values,
-            rhs, solution, expected);
-        return printVerification(verification, solve_ms) ? 0 : 5;
+            rhs, refined.solution, expected);
+        return printVerification(verification, solve_ms, refined) ? 0 : 5;
     } catch (const std::exception& error) {
         std::cerr << "Unsymmetric GPU LU failed: " << error.what() << '\n';
         return 6;
