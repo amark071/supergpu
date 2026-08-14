@@ -14,7 +14,7 @@ int main()
     const std::vector<int> rows = {2, 0, 2, 4, 1, 3};
     const std::vector<float> values(rows.size(), 1.0f);
 
-    const UnsymmetricOrdering ordering = computeColamdOrdering(
+    const UnsymmetricOrdering ordering = computeMatchingAmdOrdering(
         n, col_ptr, rows, values);
     if (ordering.structural_rank != n) {
         std::cerr << "unexpected structural rank\n";
@@ -60,6 +60,6 @@ int main()
             }
         }
     }
-    std::cout << "COLAMD, matching, and symbolic envelope smoke test passed\n";
+    std::cout << "matching, AMD, and symbolic envelope smoke test passed\n";
     return 0;
 }

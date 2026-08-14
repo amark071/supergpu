@@ -1,4 +1,4 @@
-This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2024.7.18)  14 AUG 2026 11:15
+This is XeTeX, Version 3.141592653-2.6-0.999996 (TeX Live 2024) (preloaded format=xelatex 2024.7.18)  14 AUG 2026 11:40
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -1682,21 +1682,21 @@ LaTeX Font Info:    Font shape `TU/texgyreheros(0)/b/n' will be
 
 
 
-] (./main.toc [5
-
-
-])
+] (./main.toc)
 \tf@toc=\write7
 \openout7 = `main.toc'.
 
- [6] (./main.lot)
+ [5
+
+
+] [6
+
+
+] (./main.lot)
 \tf@lot=\write8
 \openout8 = `main.lot'.
 
- [7
-
-
-] [8
+ [7] [8
 
 
 ] (./main.lof)
@@ -1767,100 +1767,25 @@ LaTeX Warning: Citation 'qiu2020nndl' on page 11 undefined on input line 21.
 
  (./chap/chap1.tex
 第一章
-
-LaTeX Warning: Citation 'casper2011pkuthss' on page 1 undefined on input line 4.
-
-
-Underfull \vbox (badness 1308) has occurred while \output is active []
-
- [1
+) [1
 
 
 
 ]
-Overfull \hbox (3.01445pt too wide) in paragraph at lines 55--57
-[]\TU/FandolSong(0)/m/n/12.045 此 外，|  写 作 指 南 中 申 明 目 录 中 需 要 保 留 原 创 页[][][]。|  本 文 使 用[][]\TU/lmtt/m/n/12.045 textblock[]\TU/FandolSong(0)/m/n/12.045 和[][]\TU/lmtt/m/n/12.045 colorbox[]\TU/FandolSong(0)/m/n/12.045 宏
- []
-
-[2] [3]
-LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
-(Font)              scaled to size 7.00075pt on input line 144.
-LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
-(Font)              scaled to size 6.99925pt on input line 144.
-
-
-LaTeX Warning: Citation 'devlin2018bert' on page 4 undefined on input line 170.
-
-
-LaTeX Warning: Citation '' on page 4 undefined on input line 170.
-
-
-LaTeX Warning: Citation 'yang2019xlnet' on page 4 undefined on input line 171.
-
-
-LaTeX Warning: Citation '' on page 4 undefined on input line 171.
-
-
-Overfull \hbox (51.84845pt too wide) in paragraph at lines 166--176
-[][] 
- []
-
-
-Underfull \hbox (badness 10000) in paragraph at lines 166--176
-
- []
-
-File: img/pku-fig-logo.png Graphic file (type bmp)
-<img/pku-fig-logo.png>
-File: img/pku-text-logo.png Graphic file (type bmp)
-<img/pku-text-logo.png>
-[4]
-File: img/pku-fig-logo.png Graphic file (type bmp)
-<img/pku-fig-logo.png>
-File: img/pku-text-logo.png Graphic file (type bmp)
-<img/pku-text-logo.png>
-
-
-LaTeX Warning: Citation 'liu2003uncertain' on page 5 undefined on input line 235.
-
-
-LaTeX Warning: Citation 'liu2003uncertain' on page 5 undefined on input line 235.
-
-
-LaTeX Warning: Citation '' on page 5 undefined on input line 235.
-
-
-Overfull \hbox (13.73355pt too wide) in paragraph at lines 235--236
-[]\TU/FandolSong(0)/m/n/12.045 上 述 公 式 来 源 于[]的  |《不 确 定 规 划》| [][]。| 
- []
-
-[5]
-
-LaTeX Warning: Citation 'devlin2018bert' on page 6 undefined on input line 242.
-
-
-LaTeX Warning: Citation 'gut2013probability' on page 6 undefined on input line 242.
-
-
-Overfull \hbox (103.77307pt too wide) in paragraph at lines 242--244
-[]\TU/FandolSong(0)/m/n/12.045 例 如[][]\TU/lmtt/m/n/12.045 \cite{devlin2018bert}[]\TU/XITS(0)/m/n/12.045 =$[]$\TU/FandolSong(0)/m/n/12.045 ，| [][]\TU/lmtt/m/n/12.045 \citeauthor{gut2013probability}[]\TU/XITS(0)/m/n/12.045 =[]\TU/FandolSong(0)/m/n/12.045 ，|
- []
-
-) [6]
 \openout2 = `chap/chap2.aux'.
 
- (./chap/chap2.tex
-第二章
-) [7
+ (./chap/chap2.tex [2
 
 
 
 
 
 ]
+第二章
+) [3]
 \openout2 = `chap/chap3.aux'.
 
- (./chap/chap3.tex [8
+ (./chap/chap3.tex [4
 
 
 
@@ -1868,20 +1793,25 @@ Overfull \hbox (103.77307pt too wide) in paragraph at lines 242--244
 
 ]
 第三章
-[9] [10]
+[5]
+LaTeX Font Info:    Font shape `TU/XITSMath-Regular(2)/m/n' will be
+(Font)              scaled to size 7.00075pt on input line 68.
+LaTeX Font Info:    Font shape `TU/XITSMath-Regular(3)/m/n' will be
+(Font)              scaled to size 6.99925pt on input line 68.
+ [6]
 Underfull \vbox (badness 3428) has occurred while \output is active []
 
- [11] [12] [13] [14]
+ [7] [8] [9] [10]
 Missing character: There is no ; ("3B) in font nullfont!
-[15]
+[11]
 Underfull \vbox (badness 10000) has occurred while \output is active []
 
- [16] [17]) [18]
+ [12] [13]) [14]
 \openout2 = `chap/chap4.aux'.
 
  (./chap/chap4.tex
 第四章
-) [19
+) [15
 
 
 
@@ -1890,7 +1820,7 @@ Underfull \vbox (badness 10000) has occurred while \output is active []
 ]
 \openout2 = `chap/chap5.aux'.
 
- (./chap/chap5.tex [20
+ (./chap/chap5.tex [16
 
 
 
@@ -1898,10 +1828,10 @@ Underfull \vbox (badness 10000) has occurred while \output is active []
 
 ]
 第五章
-) [21]
+) [17]
 \openout2 = `chap/chap6.aux'.
 
- (./chap/chap6.tex [22
+ (./chap/chap6.tex [18
 
 
 
@@ -1909,19 +1839,19 @@ Underfull \vbox (badness 10000) has occurred while \output is active []
 
 ]
 第六章
-) [23]
+) [19]
 
 LaTeX Warning: Empty bibliography on input line 114.
 
 \openout2 = `chap/ach.aux'.
 
-(./chap/ach.tex [24
+(./chap/ach.tex [20
 
 
 
 
 
-]) [25] [26
+]) [21] [22
 
 
 
@@ -1929,14 +1859,14 @@ LaTeX Warning: Empty bibliography on input line 114.
 ]
 \openout2 = `chap/ack.aux'.
 
- (./chap/ack.tex) [27
+ (./chap/ack.tex) [23
 
 
 
 ]
 \openout2 = `chap/origin.aux'.
 
- (./chap/origin.tex [28
+ (./chap/origin.tex [24
 
 
 
@@ -1950,7 +1880,7 @@ Overfull \hbox (589.44579pt too wide) in paragraph at lines 46--47
 [][][][][][][] 
  []
 
-) [29] (./main.aux (./chap/copy.aux) (./chap/abs.aux) (./chap/deno.aux) (./chap/chap1.aux) (./chap/chap2.aux) (./chap/chap3.aux) (./chap/chap4.aux) (./chap/chap5.aux) (./chap/chap6.aux) (./chap/ach.aux) (./chap/ack.aux) (./chap/origin.aux))
+) [25] (./main.aux (./chap/copy.aux) (./chap/abs.aux) (./chap/deno.aux) (./chap/chap1.aux) (./chap/chap2.aux) (./chap/chap3.aux) (./chap/chap4.aux) (./chap/chap5.aux) (./chap/chap6.aux) (./chap/ach.aux) (./chap/ack.aux) (./chap/origin.aux))
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2022/08/05>
@@ -1964,7 +1894,7 @@ LaTeX Font Warning: Size substitutions with differences
 LaTeX Warning: There were undefined references.
 
 Package rerunfilecheck Info: File `main.out' has not changed.
-(rerunfilecheck)             Checksum: 65CDAB6CF736BAD74BFEF6AC51FED356;5583.
+(rerunfilecheck)             Checksum: DE19145451D6749F205395FB6AA4DC87;4070.
 
 Package biblatex Warning: Please (re)run Biber on the file:
 (biblatex)                main
@@ -1975,12 +1905,12 @@ Package logreq Info: Writing requests to 'main.run.xml'.
 
  ) 
 Here is how much of TeX's memory you used:
- 46616 strings out of 476720
- 963910 string characters out of 5801444
- 2011888 words of memory out of 5000000
- 67815 multiletter control sequences out of 15000+600000
- 569630 words of font info for 190 fonts, out of 8000000 for 9000
+ 46359 strings out of 476720
+ 950410 string characters out of 5801444
+ 2008036 words of memory out of 5000000
+ 67564 multiletter control sequences out of 15000+600000
+ 569606 words of font info for 187 fonts, out of 8000000 for 9000
  36 hyphenation exceptions out of 8191
- 123i,20n,128p,1201b,2243s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 123i,14n,128p,1201b,2243s stack positions out of 10000i,1000n,20000p,200000b,200000s
 
-Output written on main.pdf (45 pages).
+Output written on main.pdf (41 pages).

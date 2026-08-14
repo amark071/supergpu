@@ -5,12 +5,12 @@
 
 struct UnsymmetricOrdering {
     // perm[new_column] is the original column; iperm[old_column] is its
-    // position after the COLAMD permutation.
+    // position after matching followed by AMD.
     std::vector<int> perm;
     std::vector<int> iperm;
 
-    // A value-biased maximum-cardinality matching supplies the initial row
-    // permutation. Numerical row pivoting still occurs during factorization.
+    // Duff--Koster weighted matching supplies the initial row permutation.
+    // Numerical row pivoting still occurs during factorization.
     std::vector<int> row_perm;
     std::vector<int> row_iperm;
 
@@ -27,14 +27,26 @@ struct UnsymmetricPermutedCsc {
     std::vector<float> values;
 };
 
-// Compute a structural column/row ordering without CHOLMOD.
+// Compute Duff--Koster weighted matching and scaling first, then apply AMD to
+// the matched matrix's symmetric structural envelope. CHOLMOD is not used.
+UnsymmetricOrdering computeMatchingAmdOrdering(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices);
+
+UnsymmetricOrdering computeMatchingAmdOrdering(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices,
+    const std::vector<float>& values);
+
+// Source-compatible aliases retained for callers of the earlier interface.
+// These now execute matching followed by AMD; COLAMD is no longer used.
 UnsymmetricOrdering computeColamdOrdering(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices);
 
-// Numeric overload: biases the full structural matching toward strong entries
-// and computes row/column equilibration factors.
 UnsymmetricOrdering computeColamdOrdering(
     int n,
     const std::vector<int>& col_ptr,

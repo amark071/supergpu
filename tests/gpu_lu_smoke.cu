@@ -161,7 +161,7 @@ int main()
     std::vector<float> band_values;
     denseToCsc(
         band_n, band_dense, band_col_ptr, band_rows, band_values);
-    const UnsymmetricOrdering band_ordering = computeColamdOrdering(
+    const UnsymmetricOrdering band_ordering = computeMatchingAmdOrdering(
         band_n, band_col_ptr, band_rows, band_values);
     const UnsymmetricPermutedCsc band_ordered = applyUnsymmetricPermutationCsc(
         band_n, band_col_ptr, band_rows, band_values, band_ordering);

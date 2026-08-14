@@ -12,8 +12,6 @@ find_path(AMD_INCLUDE_DIR amd.h PATH_SUFFIXES suitesparse)
 find_library(AMD_LIBRARY NAMES amd)
 find_path(CHOLMOD_INCLUDE_DIR cholmod.h PATH_SUFFIXES suitesparse)
 find_library(CHOLMOD_LIBRARY NAMES cholmod)
-find_path(COLAMD_INCLUDE_DIR colamd.h PATH_SUFFIXES suitesparse)
-find_library(COLAMD_LIBRARY NAMES colamd)
 find_library(SUITESPARSE_CONFIG_LIBRARY NAMES suitesparseconfig SuiteSparseConfig)
 
 # CUDA-enabled SuiteSparse installs include CUDA public headers from cholmod.h.
@@ -36,12 +34,6 @@ if(NOT CHOLMOD_INCLUDE_DIR OR NOT CHOLMOD_LIBRARY)
     message(FATAL_ERROR
         "SuiteSparse CHOLMOD was not found. Install libsuitesparse-dev, or set "
         "CHOLMOD_INCLUDE_DIR and CHOLMOD_LIBRARY when configuring.")
-endif()
-
-if(NOT COLAMD_INCLUDE_DIR OR NOT COLAMD_LIBRARY)
-    message(FATAL_ERROR
-        "SuiteSparse COLAMD was not found. Install libsuitesparse-dev, or set "
-        "COLAMD_INCLUDE_DIR and COLAMD_LIBRARY when configuring.")
 endif()
 
 add_library(io_func STATIC
@@ -120,17 +112,23 @@ set_target_properties(gpu_supernodal_ldlt PROPERTIES
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
+add_library(unsymmetric_matching STATIC
+    src/unsymmetric_matching.cpp
+)
+target_include_directories(unsymmetric_matching
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_compile_features(unsymmetric_matching PUBLIC cxx_std_14)
+
 add_library(unsymmetric_ordering STATIC
     src/unsymmetric_ordering.cpp
 )
 target_include_directories(unsymmetric_ordering
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
-    PRIVATE ${COLAMD_INCLUDE_DIR}
 )
-target_link_libraries(unsymmetric_ordering PUBLIC ${COLAMD_LIBRARY})
-if(SUITESPARSE_CONFIG_LIBRARY)
-    target_link_libraries(unsymmetric_ordering PUBLIC ${SUITESPARSE_CONFIG_LIBRARY})
-endif()
+target_link_libraries(unsymmetric_ordering
+    PUBLIC unsymmetric_matching amd_ordering
+)
 target_compile_features(unsymmetric_ordering PUBLIC cxx_std_14)
 
 add_library(unsymmetric_symbolic STATIC
@@ -202,6 +200,13 @@ if(SUPERNODAL_BUILD_TESTS)
         PRIVATE unsymmetric_ordering unsymmetric_symbolic)
     target_compile_features(unsymmetric_symbolic_smoke PRIVATE cxx_std_14)
     add_test(NAME unsymmetric_symbolic_smoke COMMAND unsymmetric_symbolic_smoke)
+
+    add_executable(unsymmetric_matching_smoke
+        tests/unsymmetric_matching_smoke.cpp)
+    target_link_libraries(unsymmetric_matching_smoke
+        PRIVATE unsymmetric_matching)
+    target_compile_features(unsymmetric_matching_smoke PRIVATE cxx_std_14)
+    add_test(NAME unsymmetric_matching_smoke COMMAND unsymmetric_matching_smoke)
 endif()
 
 set(SYMBOLIC_VISUALIZATION_DIR "${CMAKE_BINARY_DIR}/visualization")
@@ -285,6 +290,7 @@ set(PROJECT_WARNING_TARGETS
     ordering
     cholmod_symbolic
     gpu_supernodal_ldlt
+    unsymmetric_matching
     unsymmetric_ordering
     unsymmetric_symbolic
     unsymmetric_verification
@@ -299,6 +305,9 @@ if(TARGET gpu_lu_smoke)
 endif()
 if(TARGET unsymmetric_symbolic_smoke)
     list(APPEND PROJECT_WARNING_TARGETS unsymmetric_symbolic_smoke)
+endif()
+if(TARGET unsymmetric_matching_smoke)
+    list(APPEND PROJECT_WARNING_TARGETS unsymmetric_matching_smoke)
 endif()
 
 if(MSVC)

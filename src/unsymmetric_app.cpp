@@ -79,10 +79,11 @@ void printSymbolicReport(
     std::cout << "\n=== General/unsymmetric sparse LU ===\n";
     std::cout << "Matrix = " << input.n << 'x' << input.n
               << ", nonzero = " << ordered.values.size() << '\n';
-    std::cout << "Column ordering = COLAMD (CHOLMOD not used)\n";
+    std::cout << "Unsymmetric preprocessing = Duff-Koster matching -> AMD"
+              << " (CHOLMOD not used)\n";
     std::cout << "Structural matching rank = " << ordering.structural_rank
               << " / " << input.n << '\n';
-    std::cout << "COLAMD + numeric matching/scaling time (ms) = "
+    std::cout << "Maximum matching + scaling + AMD time (ms) = "
               << ordering_ms << '\n';
     std::cout << "Unsymmetric row/column permutation time (ms) = "
               << permutation_ms << '\n';
@@ -156,7 +157,7 @@ int runUnsymmetricGpuApplication(
         const InputMatrix input = loadMatrix(files.input_filename);
         const std::chrono::steady_clock::time_point ordering_begin =
             std::chrono::steady_clock::now();
-        const UnsymmetricOrdering ordering = computeColamdOrdering(
+        const UnsymmetricOrdering ordering = computeMatchingAmdOrdering(
             input.n, input.col_ptr, input.row_indices, input.values);
         const float ordering_ms = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - ordering_begin).count();
