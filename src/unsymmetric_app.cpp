@@ -103,9 +103,9 @@ void printFactorReport(
 {
     std::cout << "GPU LU single-column fronts = "
               << statistics.single_column_nodes << '\n';
-    std::cout << "GPU LU 2--64 column fronts = "
+    std::cout << "GPU LU batched small/medium fronts = "
               << statistics.small_medium_nodes << '\n';
-    std::cout << "GPU LU >64 column fronts = "
+    std::cout << "GPU LU panel fronts = "
               << statistics.large_front_nodes << '\n';
     std::cout << "Accepted unsymmetric pivots = "
               << statistics.accepted_pivots << '\n';
@@ -118,7 +118,7 @@ void printFactorReport(
               << statistics.concurrent_fronts << '\n';
     std::cout << "Unsymmetric front assembly time (ms) = "
               << statistics.front_assembly_milliseconds << '\n';
-    std::cout << "Small/medium LU GPU work sum (ms) = "
+    std::cout << "Batched small/medium LU wall time (ms) = "
               << statistics.small_medium_factorization_milliseconds << '\n';
     std::cout << "Large-front right-looking GPU work sum (ms) = "
               << statistics.large_front_factorization_milliseconds << '\n';

@@ -14,7 +14,6 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -152,6 +151,18 @@ LuScalar frontScale(const FrontData& front)
     return scale;
 }
 
+std::size_t estimatedTrailingUpdates(const FrontData& front)
+{
+    const int rows = static_cast<int>(front.row_ids.size());
+    const int cols = static_cast<int>(front.col_ids.size());
+    std::size_t updates = 0;
+    for (int step = 0; step < front.candidate_count; ++step) {
+        updates += static_cast<std::size_t>(rows - step - 1) *
+            static_cast<std::size_t>(cols - step - 1);
+    }
+    return updates;
+}
+
 void copyToDeviceAsync(
     DeviceArray<LuScalar>& device_matrix,
     DeviceArray<int>& device_rows,
@@ -194,116 +205,121 @@ void copyFromDeviceAsync(
         "copy LU column ids from GPU");
 }
 
-void runSmallFront(
-    DeviceArray<LuScalar>& matrix,
-    DeviceArray<int>& rows,
-    DeviceArray<int>& cols,
-    int row_count,
-    int col_count,
-    int candidate_count,
-    LuScalar threshold,
-    LuScalar zero_tolerance,
-    int& accepted,
-    int& delayed,
-    cudaStream_t stream)
+void factorSmallFrontBatch(
+    const std::vector<FrontData>& fronts,
+    const std::vector<int>& front_indices,
+    const GpuLuOptions& options,
+    std::vector<GpuFrontResult>& results)
 {
-    DeviceArray<int> output(2);
-    unsymmetric_lu_kernels::factorSmallFront<<<1, 256, 0, stream>>>(
-        matrix.get(), row_count, row_count, col_count, candidate_count,
-        rows.get(), cols.get(), threshold, zero_tolerance,
-        output.get(), output.get() + 1);
-    checkCuda(cudaGetLastError(), "launch small/medium LU kernel");
-    int host_output[2] = {0, 0};
-    checkCuda(cudaMemcpyAsync(
-        host_output, output.get(), sizeof(host_output),
-        cudaMemcpyDeviceToHost, stream), "copy small LU result");
-    checkCuda(cudaStreamSynchronize(stream), "synchronize small LU front");
-    accepted = host_output[0];
-    delayed = host_output[1];
-}
-
-int selectLargePivot(
-    const DeviceArray<LuScalar>& matrix,
-    int row_count,
-    int candidate_count,
-    int step,
-    LuScalar threshold,
-    LuScalar zero_tolerance,
-    DeviceArray<int>& device_status,
-    cudaStream_t stream)
-{
-    unsymmetric_lu_kernels::selectPivot<<<1, 1, 0, stream>>>(
-        matrix.get(), row_count, row_count, candidate_count, step,
-        threshold, zero_tolerance, device_status.get());
-    checkCuda(cudaGetLastError(), "launch large-front pivot selection");
-    int pivot = -1;
-    checkCuda(cudaMemcpyAsync(
-        &pivot, device_status.get(), sizeof(int), cudaMemcpyDeviceToHost,
-        stream), "copy selected pivot row");
-    checkCuda(cudaStreamSynchronize(stream), "synchronize pivot selection");
-    return pivot;
-}
-
-int replaceLargeColumn(
-    DeviceArray<LuScalar>& matrix,
-    DeviceArray<int>& cols,
-    int row_count,
-    int candidate_count,
-    int step,
-    int& active_end,
-    LuScalar threshold,
-    LuScalar zero_tolerance,
-    DeviceArray<int>& device_status,
-    cudaStream_t stream)
-{
-    unsymmetric_lu_kernels::findReplacement<<<1, 1, 0, stream>>>(
-        matrix.get(), row_count, row_count, candidate_count, step, active_end,
-        threshold, zero_tolerance, device_status.get(), device_status.get() + 1);
-    checkCuda(cudaGetLastError(), "launch delayed-column search");
-    int status[2] = {-1, step};
-    checkCuda(cudaMemcpyAsync(
-        status, device_status.get(), sizeof(status), cudaMemcpyDeviceToHost,
-        stream), "copy delayed-column search result");
-    checkCuda(cudaStreamSynchronize(stream), "synchronize delayed-column search");
-    active_end = status[1];
-    if (status[0] >= 0) {
-        const int blocks = std::max(1, (row_count + 255) / 256);
-        unsymmetric_lu_kernels::swapColumns<<<blocks, 256, 0, stream>>>(
-            matrix.get(), row_count, row_count, step, status[0], cols.get());
-        checkCuda(cudaGetLastError(), "launch delayed-column swap");
+    if (front_indices.empty()) {
+        return;
     }
-    return status[0];
-}
-
-void applyLargePivot(
-    DeviceArray<LuScalar>& matrix,
-    DeviceArray<int>& rows,
-    int row_count,
-    int col_count,
-    int step,
-    int pivot,
-    int panel_end,
-    cudaStream_t stream)
-{
-    if (pivot != step) {
-        const int blocks = std::max(1, (col_count + 255) / 256);
-        unsymmetric_lu_kernels::swapRows<<<blocks, 256, 0, stream>>>(
-            matrix.get(), row_count, col_count, step, pivot, rows.get());
-        checkCuda(cudaGetLastError(), "launch LU row swap");
+    typedef unsymmetric_lu_kernels::SmallFrontDescriptor Descriptor;
+    std::vector<std::size_t> matrix_offsets(front_indices.size(), 0);
+    std::vector<std::size_t> row_offsets(front_indices.size(), 0);
+    std::vector<std::size_t> col_offsets(front_indices.size(), 0);
+    std::size_t matrix_count = 0;
+    std::size_t row_count = 0;
+    std::size_t col_count = 0;
+    for (std::size_t i = 0; i < front_indices.size(); ++i) {
+        const FrontData& front = fronts[static_cast<std::size_t>(front_indices[i])];
+        matrix_offsets[i] = matrix_count;
+        row_offsets[i] = row_count;
+        col_offsets[i] = col_count;
+        matrix_count += front.matrix.size();
+        row_count += front.row_ids.size();
+        col_count += front.col_ids.size();
     }
-    const int row_blocks = std::max(1, (row_count - step + 255) / 256);
-    unsymmetric_lu_kernels::dividePivotColumn<<<row_blocks, 256, 0, stream>>>(
-        matrix.get(), row_count, row_count, step);
-    checkCuda(cudaGetLastError(), "launch LU column division");
 
-    if (step + 1 < panel_end && step + 1 < row_count) {
-        const dim3 threads(16, 8);
-        const dim3 blocks(
-            (row_count - step - 1 + threads.x - 1) / threads.x,
-            (panel_end - step - 1 + threads.y - 1) / threads.y);
-        unsymmetric_lu_kernels::updatePanel<<<blocks, threads, 0, stream>>>(
-            matrix.get(), row_count, row_count, step + 1, panel_end, step);
-        checkCuda(cudaGetLastError(), "launch LU panel update");
+    std::vector<LuScalar> host_matrix(matrix_count);
+    std::vector<int> host_rows(row_count);
+    std::vector<int> host_cols(col_count);
+    DeviceArray<LuScalar> device_matrix(matrix_count);
+    DeviceArray<int> device_rows(row_count);
+    DeviceArray<int> device_cols(col_count);
+    DeviceArray<Descriptor> device_descriptors(front_indices.size());
+    std::vector<Descriptor> descriptors(front_indices.size());
+
+    for (std::size_t i = 0; i < front_indices.size(); ++i) {
+        const FrontData& front = fronts[static_cast<std::size_t>(front_indices[i])];
+        std::copy(front.matrix.begin(), front.matrix.end(),
+                  host_matrix.begin() + matrix_offsets[i]);
+        std::copy(front.row_ids.begin(), front.row_ids.end(),
+                  host_rows.begin() + row_offsets[i]);
+        std::copy(front.col_ids.begin(), front.col_ids.end(),
+                  host_cols.begin() + col_offsets[i]);
+        Descriptor descriptor;
+        descriptor.matrix = device_matrix.get() + matrix_offsets[i];
+        descriptor.row_ids = device_rows.get() + row_offsets[i];
+        descriptor.col_ids = device_cols.get() + col_offsets[i];
+        descriptor.row_count = static_cast<int>(front.row_ids.size());
+        descriptor.col_count = static_cast<int>(front.col_ids.size());
+        descriptor.candidate_count = front.candidate_count;
+        descriptor.threshold = options.threshold_pivoting;
+        descriptor.zero_tolerance = std::max(
+            static_cast<LuScalar>(options.absolute_pivot_tolerance),
+            static_cast<LuScalar>(options.relative_pivot_tolerance) *
+                frontScale(front));
+        descriptor.accepted = 0;
+        descriptor.delayed = 0;
+        descriptors[i] = descriptor;
+    }
+
+    checkCuda(cudaMemcpy(
+        device_matrix.get(), host_matrix.data(),
+        matrix_count * sizeof(LuScalar), cudaMemcpyHostToDevice),
+        "upload batched LU matrices");
+    checkCuda(cudaMemcpy(
+        device_rows.get(), host_rows.data(),
+        row_count * sizeof(int), cudaMemcpyHostToDevice),
+        "upload batched LU row ids");
+    checkCuda(cudaMemcpy(
+        device_cols.get(), host_cols.data(),
+        col_count * sizeof(int), cudaMemcpyHostToDevice),
+        "upload batched LU column ids");
+    checkCuda(cudaMemcpy(
+        device_descriptors.get(), descriptors.data(),
+        descriptors.size() * sizeof(Descriptor), cudaMemcpyHostToDevice),
+        "upload batched LU descriptors");
+
+    unsymmetric_lu_kernels::factorSmallFronts<<<
+        static_cast<unsigned int>(descriptors.size()), 256>>>(
+            device_descriptors.get());
+    checkCuda(cudaGetLastError(), "launch batched small/medium LU");
+    checkCuda(cudaMemcpy(
+        descriptors.data(), device_descriptors.get(),
+        descriptors.size() * sizeof(Descriptor), cudaMemcpyDeviceToHost),
+        "download batched LU descriptors");
+    checkCuda(cudaMemcpy(
+        host_matrix.data(), device_matrix.get(),
+        matrix_count * sizeof(LuScalar), cudaMemcpyDeviceToHost),
+        "download batched LU matrices");
+    checkCuda(cudaMemcpy(
+        host_rows.data(), device_rows.get(),
+        row_count * sizeof(int), cudaMemcpyDeviceToHost),
+        "download batched LU row ids");
+    checkCuda(cudaMemcpy(
+        host_cols.data(), device_cols.get(),
+        col_count * sizeof(int), cudaMemcpyDeviceToHost),
+        "download batched LU column ids");
+
+    for (std::size_t i = 0; i < front_indices.size(); ++i) {
+        const int index = front_indices[i];
+        const FrontData& front = fronts[static_cast<std::size_t>(index)];
+        GpuFrontResult& result = results[static_cast<std::size_t>(index)];
+        result.large = false;
+        result.factor.candidate_count = front.candidate_count;
+        result.factor.accepted = descriptors[i].accepted;
+        result.factor.delayed = descriptors[i].delayed;
+        result.factor.matrix.assign(
+            host_matrix.begin() + matrix_offsets[i],
+            host_matrix.begin() + matrix_offsets[i] + front.matrix.size());
+        result.factor.row_ids.assign(
+            host_rows.begin() + row_offsets[i],
+            host_rows.begin() + row_offsets[i] + front.row_ids.size());
+        result.factor.col_ids.assign(
+            host_cols.begin() + col_offsets[i],
+            host_cols.begin() + col_offsets[i] + front.col_ids.size());
     }
 }
 
@@ -312,11 +328,12 @@ void flushLargePanel(
     int row_count,
     int col_count,
     int panel_begin,
-    int panel_end,
+    int accepted_end,
+    int trailing_col_begin,
     cublasHandle_t cublas)
 {
-    const int width = panel_end - panel_begin;
-    const int right_cols = col_count - panel_end;
+    const int width = accepted_end - panel_begin;
+    const int right_cols = col_count - trailing_col_begin;
     if (width <= 0 || right_cols <= 0) {
         return;
     }
@@ -325,10 +342,10 @@ void flushLargePanel(
         cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
         CUBLAS_OP_N, CUBLAS_DIAG_UNIT, width, right_cols, &one,
         matrix.get() + panel_begin + panel_begin * row_count, row_count,
-        matrix.get() + panel_begin + panel_end * row_count, row_count),
+        matrix.get() + panel_begin + trailing_col_begin * row_count, row_count),
         "cuBLAS LU panel TRSM");
 
-    const int trailing_rows = row_count - panel_end;
+    const int trailing_rows = row_count - accepted_end;
     if (trailing_rows <= 0) {
         return;
     }
@@ -336,9 +353,11 @@ void flushLargePanel(
     checkCublas(cublasSgemm(
         cublas, CUBLAS_OP_N, CUBLAS_OP_N,
         trailing_rows, right_cols, width, &minus_one,
-        matrix.get() + panel_end + panel_begin * row_count, row_count,
-        matrix.get() + panel_begin + panel_end * row_count, row_count,
-        &one, matrix.get() + panel_end + panel_end * row_count, row_count),
+        matrix.get() + accepted_end + panel_begin * row_count, row_count,
+        matrix.get() + panel_begin + trailing_col_begin * row_count, row_count,
+        &one,
+        matrix.get() + accepted_end + trailing_col_begin * row_count,
+        row_count),
         "cuBLAS LU trailing GEMM");
 }
 
@@ -359,38 +378,37 @@ void runLargeFront(
     checkCublas(cublasCreate(&cublas), "create LU cuBLAS handle");
     try {
         checkCublas(cublasSetStream(cublas, stream), "set LU cuBLAS stream");
-        DeviceArray<int> status(2);
+        DeviceArray<unsymmetric_lu_kernels::LargePanelState> device_state(1);
         int step = 0;
         int active_end = candidate_count;
         while (step < active_end) {
             const int panel_begin = step;
-            int panel_end = std::min(
-                panel_begin + options.panel_size, active_end);
-            while (step < panel_end) {
-                const int pivot = selectLargePivot(
-                    matrix, row_count, candidate_count, step,
-                    options.threshold_pivoting, zero_tolerance, status, stream);
-                if (pivot < 0) {
-                    if (step != panel_begin) {
-                        break;
-                    }
-                    const int replacement = replaceLargeColumn(
-                        matrix, cols, row_count, candidate_count, step,
-                        active_end, options.threshold_pivoting, zero_tolerance,
-                        status, stream);
-                    if (replacement < 0) {
-                        break;
-                    }
-                    panel_end = step + 1;
-                    continue;
-                }
-                applyLargePivot(
-                    matrix, rows, row_count, col_count,
-                    step, pivot, panel_end, stream);
-                ++step;
+            unsymmetric_lu_kernels::factorLargePanel<<<1, 256, 0, stream>>>(
+                matrix.get(), row_count, row_count, col_count,
+                candidate_count, rows.get(), cols.get(), panel_begin,
+                active_end, options.panel_size, options.threshold_pivoting,
+                zero_tolerance, device_state.get());
+            checkCuda(cudaGetLastError(), "launch GPU-resident LU panel");
+            unsymmetric_lu_kernels::LargePanelState host_state;
+            checkCuda(cudaMemcpyAsync(
+                &host_state, device_state.get(), sizeof(host_state),
+                cudaMemcpyDeviceToHost, stream),
+                "download LU panel summary");
+            checkCuda(cudaStreamSynchronize(stream),
+                "wait for LU panel summary");
+            if (host_state.step < panel_begin ||
+                host_state.step > candidate_count ||
+                host_state.active_end < host_state.step ||
+                host_state.active_end > active_end ||
+                host_state.updated_col_end < host_state.step ||
+                host_state.updated_col_end > col_count) {
+                throw std::runtime_error("invalid GPU LU panel state");
             }
+            step = host_state.step;
+            active_end = host_state.active_end;
             flushLargePanel(
-                matrix, row_count, col_count, panel_begin, step, cublas);
+                matrix, row_count, col_count,
+                panel_begin, step, host_state.updated_col_end, cublas);
             checkCuda(cudaStreamSynchronize(stream), "flush large LU panel");
             if (step == panel_begin && step >= active_end) {
                 break;
@@ -405,7 +423,9 @@ void runLargeFront(
     checkCublas(cublasDestroy(cublas), "destroy LU cuBLAS handle");
 }
 
-GpuFrontResult factorFrontOnGpu(FrontData front, const GpuLuOptions& options)
+GpuFrontResult factorLargeFrontOnGpu(
+    FrontData front,
+    const GpuLuOptions& options)
 {
     const std::chrono::steady_clock::time_point begin =
         std::chrono::steady_clock::now();
@@ -426,24 +446,16 @@ GpuFrontResult factorFrontOnGpu(FrontData front, const GpuLuOptions& options)
             device_matrix, device_rows, device_cols, front, stream);
 
         GpuFrontResult result;
-        result.large = front.candidate_count > options.batched_width_limit;
+        result.large = true;
         result.factor.candidate_count = front.candidate_count;
         const LuScalar zero_tolerance = std::max(
             static_cast<LuScalar>(options.absolute_pivot_tolerance),
             static_cast<LuScalar>(options.relative_pivot_tolerance) *
                 frontScale(front));
-        if (result.large) {
-            runLargeFront(
-                device_matrix, device_rows, device_cols, row_count, col_count,
-                front.candidate_count, options, zero_tolerance,
-                result.factor.accepted, result.factor.delayed, stream);
-        } else {
-            runSmallFront(
-                device_matrix, device_rows, device_cols, row_count, col_count,
-                front.candidate_count, options.threshold_pivoting,
-                zero_tolerance, result.factor.accepted,
-                result.factor.delayed, stream);
-        }
+        runLargeFront(
+            device_matrix, device_rows, device_cols, row_count, col_count,
+            front.candidate_count, options, zero_tolerance,
+            result.factor.accepted, result.factor.delayed, stream);
         result.factor.row_ids.resize(front.row_ids.size());
         result.factor.col_ids.resize(front.col_ids.size());
         result.factor.matrix.resize(front.matrix.size());
@@ -464,7 +476,8 @@ GpuFrontResult factorFrontOnGpu(FrontData front, const GpuLuOptions& options)
 
 GpuLuOptions::GpuLuOptions()
     : batched_width_limit(64),
-      panel_size(1),
+      batched_update_limit(4000000),
+      panel_size(32),
       concurrent_fronts(4),
       threshold_pivoting(0.1f),
       absolute_pivot_tolerance(1.0e-20f),
@@ -488,12 +501,12 @@ public:
     explicit Impl(const GpuLuOptions& options)
         : options_(options), n_(0), complete_(false)
     {
-        if (options_.batched_width_limit < 1 || options_.panel_size != 1 ||
+        if (options_.batched_width_limit < 1 ||
+            options_.batched_update_limit == 0 || options_.panel_size < 1 ||
             options_.concurrent_fronts < 1 ||
             options_.threshold_pivoting <= 0.0f ||
             options_.threshold_pivoting > 1.0f) {
-            throw std::invalid_argument(
-                "invalid general GPU LU options; panel_size must currently be 1");
+            throw std::invalid_argument("invalid general GPU LU options");
         }
     }
 
@@ -567,6 +580,8 @@ private:
         factors_.assign(symbolic.supernode_parent.size(), FactorData());
         input_buckets_.assign(
             symbolic.supernode_parent.size(), std::vector<MatrixEntry>());
+        row_position_.assign(static_cast<std::size_t>(n_), -1);
+        col_position_.assign(static_cast<std::size_t>(n_), -1);
         children_.assign(
             symbolic.supernode_parent.size(), std::vector<int>());
         for (std::size_t node = 0; node < symbolic.supernode_parent.size(); ++node) {
@@ -638,37 +653,36 @@ private:
     }
 
     static void appendUnique(
-        int id, std::vector<int>& ids, std::unordered_map<int, int>& positions)
+        int id, std::vector<int>& ids, std::vector<int>& positions)
     {
-        if (positions.find(id) == positions.end()) {
-            positions[id] = static_cast<int>(ids.size());
+        if (positions[static_cast<std::size_t>(id)] < 0) {
+            positions[static_cast<std::size_t>(id)] =
+                static_cast<int>(ids.size());
             ids.push_back(id);
         }
     }
 
     static void appendCandidate(
-        int id, std::vector<int>& ids, std::unordered_map<int, int>& positions)
+        int id, std::vector<int>& ids, std::vector<int>& positions)
     {
-        if (positions.find(id) != positions.end()) {
+        if (positions[static_cast<std::size_t>(id)] >= 0) {
             throw std::runtime_error("duplicate fully-summed LU candidate");
         }
-        positions[id] = static_cast<int>(ids.size());
+        positions[static_cast<std::size_t>(id)] = static_cast<int>(ids.size());
         ids.push_back(id);
     }
 
     FrontData prepareFront(
         int node,
-        const UnsymmetricSymbolicResult& symbolic) const
+        const UnsymmetricSymbolicResult& symbolic)
     {
         FrontData front;
         front.node = node;
-        std::unordered_map<int, int> row_position;
-        std::unordered_map<int, int> col_position;
         const int owned_begin = symbolic.supernode_ptr[static_cast<std::size_t>(node)];
         const int owned_end = symbolic.supernode_ptr[static_cast<std::size_t>(node + 1)];
         for (int id = owned_begin; id < owned_end; ++id) {
-            appendCandidate(id, front.row_ids, row_position);
-            appendCandidate(id, front.col_ids, col_position);
+            appendCandidate(id, front.row_ids, row_position_);
+            appendCandidate(id, front.col_ids, col_position_);
         }
         for (std::size_t c = 0; c < children_[static_cast<std::size_t>(node)].size(); ++c) {
             const FactorData& child = factors_[static_cast<std::size_t>(
@@ -676,10 +690,10 @@ private:
             for (int k = 0; k < child.delayed; ++k) {
                 appendCandidate(
                     child.row_ids[static_cast<std::size_t>(child.accepted + k)],
-                    front.row_ids, row_position);
+                    front.row_ids, row_position_);
                 appendCandidate(
                     child.col_ids[static_cast<std::size_t>(child.accepted + k)],
-                    front.col_ids, col_position);
+                    front.col_ids, col_position_);
             }
         }
         if (front.row_ids.size() != front.col_ids.size()) {
@@ -691,55 +705,59 @@ private:
         const int front_end = symbolic.front_ptr[static_cast<std::size_t>(node + 1)];
         for (int p = front_begin; p < front_end; ++p) {
             const int id = symbolic.front_indices[static_cast<std::size_t>(p)];
-            appendUnique(id, front.row_ids, row_position);
-            appendUnique(id, front.col_ids, col_position);
+            appendUnique(id, front.row_ids, row_position_);
+            appendUnique(id, front.col_ids, col_position_);
         }
         for (std::size_t c = 0; c < children_[static_cast<std::size_t>(node)].size(); ++c) {
             const FactorData& child = factors_[static_cast<std::size_t>(
                 children_[static_cast<std::size_t>(node)][c])];
             for (std::size_t k = static_cast<std::size_t>(child.accepted);
                  k < child.row_ids.size(); ++k) {
-                appendUnique(child.row_ids[k], front.row_ids, row_position);
+                appendUnique(child.row_ids[k], front.row_ids, row_position_);
             }
             for (std::size_t k = static_cast<std::size_t>(child.accepted);
                  k < child.col_ids.size(); ++k) {
-                appendUnique(child.col_ids[k], front.col_ids, col_position);
+                appendUnique(child.col_ids[k], front.col_ids, col_position_);
             }
         }
         front.matrix.assign(
             front.row_ids.size() * front.col_ids.size(), 0.0f);
-        assembleInput(node, row_position, col_position, front);
-        assembleChildren(node, row_position, col_position, front);
+        assembleInput(node, row_position_, col_position_, front);
+        assembleChildren(node, row_position_, col_position_, front);
+        for (std::size_t i = 0; i < front.row_ids.size(); ++i) {
+            row_position_[static_cast<std::size_t>(front.row_ids[i])] = -1;
+        }
+        for (std::size_t i = 0; i < front.col_ids.size(); ++i) {
+            col_position_[static_cast<std::size_t>(front.col_ids[i])] = -1;
+        }
         return front;
     }
 
     void assembleInput(
         int node,
-        const std::unordered_map<int, int>& row_position,
-        const std::unordered_map<int, int>& col_position,
+        const std::vector<int>& row_position,
+        const std::vector<int>& col_position,
         FrontData& front) const
     {
         const int leading_dimension = static_cast<int>(front.row_ids.size());
         const std::vector<MatrixEntry>& entries =
             input_buckets_[static_cast<std::size_t>(node)];
         for (std::size_t p = 0; p < entries.size(); ++p) {
-            const std::unordered_map<int, int>::const_iterator row =
-                row_position.find(entries[p].row);
-            const std::unordered_map<int, int>::const_iterator col =
-                col_position.find(entries[p].col);
-            if (row == row_position.end() || col == col_position.end()) {
+            const int row = row_position[static_cast<std::size_t>(entries[p].row)];
+            const int col = col_position[static_cast<std::size_t>(entries[p].col)];
+            if (row < 0 || col < 0) {
                 throw std::runtime_error(
                     "symbolic envelope omitted an original unsymmetric entry");
             }
             front.matrix[static_cast<std::size_t>(
-                row->second + col->second * leading_dimension)] += entries[p].value;
+                row + col * leading_dimension)] += entries[p].value;
         }
     }
 
     void assembleChildren(
         int node,
-        const std::unordered_map<int, int>& row_position,
-        const std::unordered_map<int, int>& col_position,
+        const std::vector<int>& row_position,
+        const std::vector<int>& col_position,
         FrontData& front) const
     {
         const int leading_dimension = static_cast<int>(front.row_ids.size());
@@ -749,10 +767,16 @@ private:
             const int child_rows = static_cast<int>(child.row_ids.size());
             for (std::size_t col = static_cast<std::size_t>(child.accepted);
                  col < child.col_ids.size(); ++col) {
-                const int parent_col = col_position.at(child.col_ids[col]);
+                const int parent_col =
+                    col_position[static_cast<std::size_t>(child.col_ids[col])];
                 for (std::size_t row = static_cast<std::size_t>(child.accepted);
                      row < child.row_ids.size(); ++row) {
-                    const int parent_row = row_position.at(child.row_ids[row]);
+                    const int parent_row =
+                        row_position[static_cast<std::size_t>(child.row_ids[row])];
+                    if (parent_row < 0 || parent_col < 0) {
+                        throw std::runtime_error(
+                            "symbolic envelope omitted an LU contribution");
+                    }
                     front.matrix[static_cast<std::size_t>(
                         parent_row + parent_col * leading_dimension)] +=
                         child.matrix[row + col * static_cast<std::size_t>(child_rows)];
@@ -766,7 +790,11 @@ private:
         const UnsymmetricSymbolicResult& symbolic)
     {
         std::vector<FrontData> fronts;
+        std::vector<int> small_indices;
+        std::vector<int> large_indices;
         fronts.reserve(nodes.size());
+        small_indices.reserve(nodes.size());
+        large_indices.reserve(nodes.size());
         const std::chrono::steady_clock::time_point assembly_begin =
             std::chrono::steady_clock::now();
         for (std::size_t i = 0; i < nodes.size(); ++i) {
@@ -774,42 +802,68 @@ private:
             const int width = fronts.back().candidate_count;
             if (width == 1) {
                 ++statistics_.single_column_nodes;
-            } else if (width <= options_.batched_width_limit) {
+                small_indices.push_back(static_cast<int>(i));
+            } else if (width <= options_.batched_width_limit &&
+                       estimatedTrailingUpdates(fronts.back()) <=
+                           options_.batched_update_limit) {
                 ++statistics_.small_medium_nodes;
+                small_indices.push_back(static_cast<int>(i));
             } else {
                 ++statistics_.large_front_nodes;
+                large_indices.push_back(static_cast<int>(i));
             }
         }
         statistics_.front_assembly_milliseconds +=
             std::chrono::duration<float, std::milli>(
                 std::chrono::steady_clock::now() - assembly_begin).count();
 
+        std::vector<GpuFrontResult> small_results(fronts.size());
+        const std::chrono::steady_clock::time_point small_begin =
+            std::chrono::steady_clock::now();
+        factorSmallFrontBatch(
+            fronts, small_indices, options_, small_results);
+        statistics_.small_medium_factorization_milliseconds +=
+            std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - small_begin).count();
+        for (std::size_t i = 0; i < small_indices.size(); ++i) {
+            const int index = small_indices[i];
+            GpuFrontResult& result = small_results[static_cast<std::size_t>(index)];
+            statistics_.accepted_pivots +=
+                static_cast<std::size_t>(result.factor.accepted);
+            statistics_.delayed_columns +=
+                static_cast<std::size_t>(result.factor.delayed);
+            factors_[static_cast<std::size_t>(nodes[static_cast<std::size_t>(index)])] =
+                std::move(result.factor);
+        }
+
         const std::size_t concurrency = static_cast<std::size_t>(
             options_.concurrent_fronts);
-        for (std::size_t first = 0; first < nodes.size(); first += concurrency) {
-            const std::size_t end = std::min(nodes.size(), first + concurrency);
+        for (std::size_t first = 0;
+             first < large_indices.size(); first += concurrency) {
+            const std::size_t end = std::min(
+                large_indices.size(), first + concurrency);
             std::vector<std::future<GpuFrontResult> > futures;
             for (std::size_t i = first; i < end; ++i) {
+                const int index = large_indices[i];
                 futures.push_back(std::async(
                     std::launch::async,
-                    [this, front = std::move(fronts[i])]() mutable {
-                        return factorFrontOnGpu(std::move(front), options_);
+                    [this, front = std::move(
+                         fronts[static_cast<std::size_t>(index)])]() mutable {
+                        return factorLargeFrontOnGpu(
+                            std::move(front), options_);
                     }));
             }
             for (std::size_t i = first; i < end; ++i) {
+                const int index = large_indices[i];
                 GpuFrontResult result = futures[i - first].get();
                 statistics_.accepted_pivots +=
                     static_cast<std::size_t>(result.factor.accepted);
                 statistics_.delayed_columns +=
                     static_cast<std::size_t>(result.factor.delayed);
-                if (result.large) {
-                    statistics_.large_front_factorization_milliseconds +=
-                        result.milliseconds;
-                } else {
-                    statistics_.small_medium_factorization_milliseconds +=
-                        result.milliseconds;
-                }
-                factors_[static_cast<std::size_t>(nodes[i])] =
+                statistics_.large_front_factorization_milliseconds +=
+                    result.milliseconds;
+                factors_[static_cast<std::size_t>(
+                    nodes[static_cast<std::size_t>(index)])] =
                     std::move(result.factor);
             }
         }
@@ -860,6 +914,8 @@ private:
     std::vector<FactorData> factors_;
     std::vector<std::vector<MatrixEntry> > input_buckets_;
     std::vector<std::vector<int> > children_;
+    std::vector<int> row_position_;
+    std::vector<int> col_position_;
 };
 
 GpuSupernodalLuFactor::GpuSupernodalLuFactor(const GpuLuOptions& options)
