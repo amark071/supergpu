@@ -1,6 +1,6 @@
 clc;clear;
 %% 矩阵读取
-matrix = load('data/A_1215_amd.dat');
+matrix = load('E:/mumps/supernodal_gpu/data/A_1215.dat');
 
 % 矩阵处理，转化为sparse类型
 row = matrix(1,1);

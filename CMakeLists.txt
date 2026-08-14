@@ -12,6 +12,8 @@ find_path(AMD_INCLUDE_DIR amd.h PATH_SUFFIXES suitesparse)
 find_library(AMD_LIBRARY NAMES amd)
 find_path(CHOLMOD_INCLUDE_DIR cholmod.h PATH_SUFFIXES suitesparse)
 find_library(CHOLMOD_LIBRARY NAMES cholmod)
+find_path(COLAMD_INCLUDE_DIR colamd.h PATH_SUFFIXES suitesparse)
+find_library(COLAMD_LIBRARY NAMES colamd)
 find_library(SUITESPARSE_CONFIG_LIBRARY NAMES suitesparseconfig SuiteSparseConfig)
 
 # CUDA-enabled SuiteSparse installs include CUDA public headers from cholmod.h.
@@ -34,6 +36,12 @@ if(NOT CHOLMOD_INCLUDE_DIR OR NOT CHOLMOD_LIBRARY)
     message(FATAL_ERROR
         "SuiteSparse CHOLMOD was not found. Install libsuitesparse-dev, or set "
         "CHOLMOD_INCLUDE_DIR and CHOLMOD_LIBRARY when configuring.")
+endif()
+
+if(NOT COLAMD_INCLUDE_DIR OR NOT COLAMD_LIBRARY)
+    message(FATAL_ERROR
+        "SuiteSparse COLAMD was not found. Install libsuitesparse-dev, or set "
+        "COLAMD_INCLUDE_DIR and COLAMD_LIBRARY when configuring.")
 endif()
 
 add_library(io_func STATIC
@@ -112,25 +120,88 @@ set_target_properties(gpu_supernodal_ldlt PROPERTIES
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
+add_library(unsymmetric_ordering STATIC
+    src/unsymmetric_ordering.cpp
+)
+target_include_directories(unsymmetric_ordering
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${COLAMD_INCLUDE_DIR}
+)
+target_link_libraries(unsymmetric_ordering PUBLIC ${COLAMD_LIBRARY})
+if(SUITESPARSE_CONFIG_LIBRARY)
+    target_link_libraries(unsymmetric_ordering PUBLIC ${SUITESPARSE_CONFIG_LIBRARY})
+endif()
+target_compile_features(unsymmetric_ordering PUBLIC cxx_std_14)
+
+add_library(unsymmetric_symbolic STATIC
+    src/unsymmetric_symbolic.cpp
+)
+target_include_directories(unsymmetric_symbolic
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_compile_features(unsymmetric_symbolic PUBLIC cxx_std_14)
+
+add_library(unsymmetric_verification STATIC
+    utils/unsymmetric_verification.cpp
+)
+target_include_directories(unsymmetric_verification
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_compile_features(unsymmetric_verification PUBLIC cxx_std_14)
+
+add_library(gpu_supernodal_lu STATIC
+    src/gpu_supernodal_lu.cu
+)
+target_include_directories(gpu_supernodal_lu
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(gpu_supernodal_lu
+    PUBLIC CUDA::cudart CUDA::cublas Threads::Threads unsymmetric_symbolic
+)
+target_compile_features(gpu_supernodal_lu PUBLIC cxx_std_14 cuda_std_14)
+set_target_properties(gpu_supernodal_lu PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+)
+
 add_executable(supernodal_gpu
     main.cpp
     src/supernodal_app.cpp
+    src/unsymmetric_app.cpp
     src/symbolic_pipeline.cpp
     utils/solution_verification.cpp
     utils/symbolic_cache.cpp
 )
 target_link_libraries(supernodal_gpu
-    PRIVATE io_func ordering cholmod_symbolic gpu_supernodal_ldlt
+    PRIVATE
+        io_func ordering cholmod_symbolic gpu_supernodal_ldlt
+        unsymmetric_ordering unsymmetric_symbolic
+        unsymmetric_verification gpu_supernodal_lu
 )
 target_compile_features(supernodal_gpu PRIVATE cxx_std_14)
 
-option(SUPERNODAL_BUILD_TESTS "Build the synthetic GPU LDLT smoke test" OFF)
+option(SUPERNODAL_BUILD_TESTS "Build synthetic GPU factorization smoke tests" OFF)
 if(SUPERNODAL_BUILD_TESTS)
     enable_testing()
     add_executable(gpu_ldlt_smoke tests/gpu_ldlt_smoke.cu)
     target_link_libraries(gpu_ldlt_smoke PRIVATE gpu_supernodal_ldlt)
     target_compile_features(gpu_ldlt_smoke PRIVATE cxx_std_14 cuda_std_14)
     add_test(NAME gpu_ldlt_smoke COMMAND gpu_ldlt_smoke)
+
+    add_executable(gpu_lu_smoke tests/gpu_lu_smoke.cu)
+    target_link_libraries(gpu_lu_smoke
+        PRIVATE
+            gpu_supernodal_lu unsymmetric_ordering unsymmetric_symbolic)
+    target_compile_features(gpu_lu_smoke PRIVATE cxx_std_14 cuda_std_14)
+    add_test(NAME gpu_lu_smoke COMMAND gpu_lu_smoke)
+
+    add_executable(unsymmetric_symbolic_smoke
+        tests/unsymmetric_symbolic_smoke.cpp)
+    target_link_libraries(unsymmetric_symbolic_smoke
+        PRIVATE unsymmetric_ordering unsymmetric_symbolic)
+    target_compile_features(unsymmetric_symbolic_smoke PRIVATE cxx_std_14)
+    add_test(NAME unsymmetric_symbolic_smoke COMMAND unsymmetric_symbolic_smoke)
 endif()
 
 set(SYMBOLIC_VISUALIZATION_DIR "${CMAKE_BINARY_DIR}/visualization")
@@ -214,10 +285,20 @@ set(PROJECT_WARNING_TARGETS
     ordering
     cholmod_symbolic
     gpu_supernodal_ldlt
+    unsymmetric_ordering
+    unsymmetric_symbolic
+    unsymmetric_verification
+    gpu_supernodal_lu
     supernodal_gpu
 )
 if(TARGET gpu_ldlt_smoke)
     list(APPEND PROJECT_WARNING_TARGETS gpu_ldlt_smoke)
+endif()
+if(TARGET gpu_lu_smoke)
+    list(APPEND PROJECT_WARNING_TARGETS gpu_lu_smoke)
+endif()
+if(TARGET unsymmetric_symbolic_smoke)
+    list(APPEND PROJECT_WARNING_TARGETS unsymmetric_symbolic_smoke)
 endif()
 
 if(MSVC)

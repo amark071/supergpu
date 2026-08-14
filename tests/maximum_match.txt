@@ -1,0 +1,617 @@
+/*
+ * Duff-Koster MPD 匹配 + Duff-Pralet 2005 循环切割版本。
+ *
+ * 目标：
+ *   1) 使用 Duff-Koster MPD 加权二分匹配，寻找一个包含大元素的不对称匹配。
+ *   2) 遵循 Duff-Pralet 2005 的方法，将匹配排列分解为若干循环，并将每个循环切割为候选的对称 1x1 / 2x2 主元。
+ *
+ * 说明：
+ *   - 本文件实现了循环切割 / 主元预选阶段，不实现完整的压缩图 AMD/METIS 排序。
+ *   - 对于长循环，通过基于行/列度数构建的结构 Markowitz 型评分，比较两种或所有可能的切割方式。
+ *
+ */
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <limits>
+#include <vector>
+
+#include "maximum_match.h"
+#include "../utils/time_util.h"
+#include "../log/bepss_log.h"
+
+namespace bepss {
+
+static constexpr VALUE EPS_VAL = 1e-300;
+static constexpr VALUE ZERO_TOL = 1e-12;
+
+#define MM_POS_MARK (-1)
+
+
+void HybridQueue::resetSize(DIM n) {
+    q1.clear(); 
+    q2.clear(); 
+    q2Pos.assign(n, MM_POS_MARK);
+    q1.reserve(256); 
+    q2.reserve(256);
+}
+
+void HybridQueue::reset(const VALUE* d) {
+    dist = d;
+    bThreshold = -INF;
+    for (DIM x : q2) {
+        q2Pos[x] = MM_POS_MARK;
+    }
+    q1.clear(); 
+    q2.clear();
+}
+
+void HybridQueue::pushOrDecrease(DIM i) {
+    const VALUE di = dist[i];
+    if (di <= bThreshold) {
+        if (q2Pos[i] >= 0) {
+            heapRemove(q2Pos[i]);
+        }
+        q1.push_back(i);
+        return;
+    }
+    if (q2Pos[i] < 0) {
+        q2Pos[i] = static_cast<DIM>(q2.size());
+        q2.push_back(i);
+        siftUp(static_cast<DIM>(q2.size()) - 1);
+    } else {
+        siftUp(q2Pos[i]);
+    }
+}
+
+DIM HybridQueue::popMin() {
+    if (q1.empty()) {
+        if (q2.empty()) {
+            return MM_POS_MARK;
+        }
+        const VALUE dmin = dist[q2[0]];
+        bThreshold = dmin * (1.0 + ALPHA);
+        while (!q2.empty() && dist[q2[0]] <= bThreshold) {
+            DIM x = q2[0];
+            q1.push_back(x);
+            heapRemove(0);
+        }
+    }
+    DIM x = q1.back();
+    q1.pop_back();
+    return x;
+}
+
+void HybridQueue::siftUp(DIM p) {
+    while (p > 0) {
+        DIM q = (p - 1) >> 1;
+        if (dist[q2[q]] <= dist[q2[p]]) {
+            break;
+        }
+        swapQ2(q, p);
+        p = q;
+    }
+}
+
+void HybridQueue::siftDown(DIM p) {
+    const DIM sz = static_cast<DIM>(q2.size());
+    while (true) {
+        DIM s = p;
+        const DIM l = (p << 1) + 1;
+        const DIM r = l + 1;
+        if (l < sz && dist[q2[l]] < dist[q2[s]]) {
+            s = l;
+        }
+        if (r < sz && dist[q2[r]] < dist[q2[s]]) {
+            s = r;
+        }
+        if (s == p) {
+                break;
+        }
+        swapQ2(p, s);
+        p = s;
+    }
+}
+
+void HybridQueue::heapRemove(DIM p) {
+    const DIM sz = static_cast<DIM>(q2.size());
+    q2Pos[q2[p]] = MM_POS_MARK;
+    if (p == sz - 1) { 
+        q2.pop_back(); 
+        return; 
+    }
+    q2[p] = q2.back();
+    q2.pop_back();
+    q2Pos[q2[p]] = p;
+    siftUp(p);
+    siftDown(p);
+}
+
+void MaximumMatch::precomputeCosts() {
+    const auto& cp = A_.colptr;
+    const auto& av = A_.values;
+
+    #pragma omp parallel for schedule(static)
+    for (DIM j = 0; j < n_; ++j) {
+        VALUE mx = 0.0;
+        for (NNZ p = cp[j]; p < cp[j + 1]; ++p) {
+            VALUE v = std::abs(av[p]);
+            if (v > mx) {
+                mx = v;
+            }
+        }
+        colMaxLog_[j] = (mx > EPS_VAL) ? std::log(mx) : -INF;
+    }
+
+    #pragma omp parallel for schedule(static)
+    for (DIM j = 0; j < n_; ++j) {
+        const VALUE lm = colMaxLog_[j];
+        for (NNZ p = cp[j]; p < cp[j + 1]; ++p) {
+            const VALUE x = std::abs(av[p]);
+            VALUE c = (x > EPS_VAL && lm > -INF) ? (lm - std::log(x)) : INF;
+            if (c < 0.0 && c > -1e-13) {
+                c = 0.0;
+            }
+            cost_[p] = c;
+        }
+    }
+}
+
+void MaximumMatch::initialExtremeMatching() {
+    std::fill(u_.begin(), u_.end(), INF);
+
+    for (DIM j = 0; j < n_; ++j) {
+        for (NNZ p = A_.colptr[j]; p < A_.colptr[j + 1]; ++p) {
+            const DIM i = A_.rowptr[p];
+            if (cost_[p] < u_[i]) {
+                u_[i] = cost_[p];
+            }
+        }
+    }
+    for (DIM i = 0; i < n_; ++i) {
+        if (u_[i] == INF) {
+            u_[i] = 0.0;
+        }
+    }
+
+    for (DIM j = 0; j < n_; ++j) {
+        VALUE mn = INF;
+        for (NNZ p = A_.colptr[j]; p < A_.colptr[j + 1]; ++p) {
+            const DIM i = A_.rowptr[p];
+            const VALUE x = cost_[p] - u_[i];
+            if (x < mn) {
+                mn = x;
+            }
+        }
+        v_[j] = (mn < INF) ? mn : 0.0;
+    }
+
+    for (DIM j = 0; j < n_; ++j) {
+        for (NNZ p = A_.colptr[j]; p < A_.colptr[j + 1]; ++p) {
+            const DIM i = A_.rowptr[p];
+
+            if (mr_[i] >= 0) {
+                continue;
+            }
+
+            if (std::abs(cbar(i, j, p)) <= ZERO_TOL) {
+                mr_[i] = j;
+                mc_[j] = i;
+                matchPtr_[j] = p;
+                break;
+            }
+        }
+    }
+
+    for (DIM j = 0; j < n_; ++j) {
+        if (mc_[j] >= 0) {
+            continue;
+        }
+
+        for (NNZ p = A_.colptr[j]; p < A_.colptr[j + 1]; ++p) {
+            const DIM i = A_.rowptr[p];
+            if (std::abs(cbar(i, j, p)) > ZERO_TOL) {
+                continue;
+            }
+            if (mr_[i] < 0) {
+                mr_[i] = j; 
+                mc_[j] = i; 
+                matchPtr_[j] = p;
+                break;
+            }
+
+            const DIM j1 = mr_[i];
+            bool done = false;
+            for (NNZ p2 = A_.colptr[j1]; p2 < A_.colptr[j1 + 1]; ++p2) {
+                const DIM i1 = A_.rowptr[p2];
+                if (mr_[i1] >= 0) {
+                    continue;
+                }
+
+                if (std::abs(cbar(i1, j1, p2)) <= ZERO_TOL) {
+                    mr_[i] = j;
+                    mc_[j] = i;
+                    matchPtr_[j] = p;
+                    mr_[i1] = j1;
+                    mc_[j1] = i1;
+                    matchPtr_[j1] = p2;
+                    done = true;
+                    break;
+                }
+            }
+
+            if (done) {
+                break;
+            }
+        }
+    }
+}
+
+bool MaximumMatch::findShortestAugmentPath(DIM j0, HybridQueue& hq) {
+    for (DIM i : touched_) {
+        dist_[i] = INF;
+        prevCol_[i] = MM_POS_MARK;
+        prevPtr_[i] = MM_POS_MARK;
+        inB_[i] = 0;
+        inQ_[i] = 0;
+    }
+    touched_.clear();
+    hq.reset(dist_.data());
+
+    VALUE lsp = 0.0;
+    VALUE lsap = INF;
+    DIM isap = MM_POS_MARK;
+    NNZ isap_ptr = MM_POS_MARK;
+    DIM j = j0;
+
+    while (true) {
+        for (NNZ p = A_.colptr[j]; p < A_.colptr[j + 1]; ++p) {
+            const DIM i = A_.rowptr[p];
+            if (inB_[i]) {
+                continue;
+            }
+
+            VALUE rc = cbar(i, j, p);
+            if (rc < 0.0 && rc > -1e-10) {
+                rc = 0.0;
+            }
+
+            const VALUE dnew = lsp + rc;
+            if (!(dnew < lsap)) {
+                continue;
+            }
+
+            if (mr_[i] < 0) {
+                lsap = dnew;
+                isap = i;
+                isap_ptr = p;
+                prevCol_[i] = j;
+                prevPtr_[i] = p;
+                if (!inQ_[i]) { 
+                    inQ_[i] = 1; 
+                    touched_.push_back(i); 
+                }
+            } else if (dnew < dist_[i]) {
+                if (dist_[i] == INF) {
+                    touched_.push_back(i);
+                }
+
+                dist_[i] = dnew;
+                prevCol_[i] = j;
+                prevPtr_[i] = p;
+
+                if (!inQ_[i]) {
+                    inQ_[i] = 1;
+                }
+                hq.pushOrDecrease(i);
+            }
+        }
+
+        if (hq.empty()) {
+            break;
+        }
+
+        DIM iNext = hq.popMin();
+        while (iNext >= 0 && inB_[iNext]) {
+            iNext = hq.popMin();
+        }
+        if (iNext < 0) {
+            break;
+        }
+
+        lsp = dist_[iNext];
+        if (lsap <= lsp) {
+            break;
+        }
+
+        inB_[iNext] = 1;
+        inQ_[iNext] = 0;
+        j = mr_[iNext];
+    }
+
+    if (isap < 0) {
+        return false;
+    }
+
+    updateCols_.clear();
+    ++updStamp_;
+    if (updStamp_ == std::numeric_limits<DIM>::max()) {
+        std::fill(updateMark_.begin(), updateMark_.end(), 0);
+        updStamp_ = 1;
+    }
+
+    for (DIM i : touched_) {
+        if (inB_[i]) {
+            u_[i] += dist_[i] - lsap;
+            markUpdateCol(mr_[i]);
+        }
+    }
+
+    pathCols_.clear();
+    DIM i_cur = isap;
+    NNZ p_cur = isap_ptr;
+    while (i_cur >= 0) {
+        const DIM j_cur = prevCol_[i_cur];
+        const DIM i_old = mc_[j_cur];
+
+        mr_[i_cur] = j_cur;
+        mc_[j_cur] = i_cur;
+        matchPtr_[j_cur] = p_cur;
+        pathCols_.push_back(j_cur);
+        markUpdateCol(j_cur);
+
+        if (i_old < 0) {
+            break;
+        }
+
+        p_cur = prevPtr_[i_old];
+        i_cur = i_old;
+    }
+
+    for (DIM jj : updateCols_) {
+        const DIM ii = mc_[jj];
+        const NNZ pp = matchPtr_[jj];
+        if (ii >= 0 && pp >= 0) {
+            v_[jj] = cost_[pp] - u_[ii];
+        }
+    }
+    return true;
+}
+
+MatchingResult MaximumMatch::run() {
+    precomputeCosts();
+    initialExtremeMatching();
+
+    HybridQueue hq(n_);
+    for (DIM j = 0; j < n_; ++j) {
+        if (mc_[j] < 0) {
+            (void)findShortestAugmentPath(j, hq);
+        }
+    }
+
+    MatchingResult r;
+    r.cardinality = 0;
+    for (DIM j = 0; j < n_; ++j) {
+        if (mc_[j] >= 0) {
+            ++r.cardinality;
+        }
+    }
+    r.perfect = (r.cardinality == n_);
+
+    r.Dr.resize(n_);
+    r.Dc.resize(n_);
+    for (DIM i = 0; i < n_; ++i) {
+        r.Dr[i] = std::exp(u_[i]);
+    }
+
+    for (DIM j = 0; j < n_; ++j) {
+        r.Dc[j] = (colMaxLog_[j] == -INF) ? 1.0 : std::exp(v_[j] - colMaxLog_[j]);
+    }
+
+    r.row2Col = std::move(mr_);
+    r.col2Row = std::move(mc_);
+    return r;
+}
+
+static std::vector<NNZ> structural_degrees(const bef::CscMatrix& A) {
+    const DIM n = A.rows;
+    std::vector<NNZ> deg(n, 0);
+    for (NNZ p = 0; p < A.nnz; ++p) {
+        ++deg[A.rowptr[p]];
+    }
+
+    for (DIM i = 0; i < n; ++i) {
+        deg[i] += A.colptr[i + 1] - A.colptr[i];
+
+        if (deg[i] <= 0) {
+            deg[i] = 1;
+        }
+    }
+    return deg;
+}
+
+static inline NNZ pairStructScore(DIM a, DIM b, const std::vector<NNZ>& deg) {
+    const NNZ da = std::max(NNZ(1), deg[a]);
+    const NNZ db = std::max(NNZ(1), deg[b]);
+    return (da - 1) * (db - 1);
+}
+
+static void appendPair(std::vector<DIM>& part2, DIM a, DIM b) {
+    part2.push_back(a);
+    part2.push_back(b);
+}
+
+static void processCycleRange(const std::vector<DIM>& path, NNZ beg, NNZ end,
+                                const std::vector<NNZ>& deg,
+                                std::vector<DIM>& part2,
+                                std::vector<DIM>& part1,
+                                std::vector<DIM>& leftovers) {
+    const NNZ L = end - beg;
+    if (L <= 0) {
+        return;
+    }
+    if (L == 1) {
+        part1.push_back(path[beg]);
+        return;
+    }
+    if (L == 2) {
+        appendPair(part2, path[beg], path[beg + 1]);
+        return;
+    }
+
+    const NNZ k = L / 2;
+    const NNZ choices = (L % 2 == 0) ? 2 : L;
+    NNZ best_score = std::numeric_limits<NNZ>::max();
+    NNZ best_offset = 0;
+    DIM best_leftover = MM_POS_MARK;
+
+    auto cyc = [&](NNZ t) -> DIM { return path[beg + (t % L)]; };
+
+    for (NNZ off = 0; off < choices; ++off) {
+        NNZ score = 0;
+        for (NNZ t = 0; t < k; ++t) {
+            const DIM a = cyc(off + 2 * t);
+            const DIM b = cyc(off + 2 * t + 1);
+            score += pairStructScore(a, b, deg);
+        }
+        DIM leftover = MM_POS_MARK;
+        if (L % 2 == 1) {
+            leftover = cyc(off + 2 * k);
+            score += deg[leftover];
+        }
+        if (score < best_score) {
+            best_score = score;
+            best_offset = off;
+            best_leftover = leftover;
+        }
+    }
+
+    for (NNZ t = 0; t < k; ++t) {
+        const DIM a = cyc(best_offset + 2 * t);
+        const DIM b = cyc(best_offset + 2 * t + 1);
+        appendPair(part2, a, b);
+    }
+    if (best_leftover >= 0) {
+        leftovers.push_back(best_leftover);
+    }
+}
+
+static void buildSymmetricPermutation(const bef::CscMatrix& A,
+                                        const std::vector<DIM>& sigma,
+                                        std::vector<DIM>& matchPerm,
+                                        DIM& pairSize) {
+    const DIM n = A.rows;
+    const std::vector<NNZ> deg = structural_degrees(A);
+
+    // part2 stores the expanded 2x2 blocks: i1,j1,i2,j2,...
+    // part1 stores 1x1 pivots; leftovers stores vertices discarded by odd/open chains.
+    std::vector<DIM> part2, part1, leftovers;
+    part2.reserve(n);
+    part1.reserve(1024);
+    leftovers.reserve(128);
+
+    std::vector<bool> done(n, false);
+    std::vector<DIM> path;
+    std::vector<NNZ> pos(n, MM_POS_MARK);
+    path.reserve(256);
+
+    for (DIM s = 0; s < n; ++s) {
+        if (done[s]) {
+            continue;
+        }
+
+        path.clear();
+        DIM cur = s;
+
+        while (cur >= 0 && cur < n && !done[cur]
+               && sigma[cur] >= 0 && sigma[cur] < n
+               && pos[cur] < 0) {
+            pos[cur] = static_cast<NNZ>(path.size());
+            path.push_back(cur);
+            cur = sigma[cur];
+        }
+
+        if (cur >= 0 && cur < n && pos[cur] >= 0) {
+            const NNZ beg = pos[cur];
+            for (NNZ t = 0; t < beg; ++t) {
+                leftovers.push_back(path[t]);
+            }
+
+            processCycleRange(path, beg, static_cast<NNZ>(path.size()),
+                                deg, part2, part1, leftovers);
+        } else {
+            for (DIM x : path) {
+                leftovers.push_back(x);
+            }
+            if (path.empty() && (sigma[s] < 0 || sigma[s] >= n)) {
+                leftovers.push_back(s);
+            }
+        }
+
+        for (DIM x : path) {
+            done[x] = true;
+            pos[x] = MM_POS_MARK;
+        }
+        if (path.empty()) {
+            done[s] = true;
+        }
+    }
+
+    auto& sym_perm = matchPerm;
+    sym_perm.reserve(n);
+    std::vector<bool> seen(n, false);
+
+    auto appendUnique = [&](const std::vector<DIM>& v) {
+        for (DIM x : v) {
+            if (0 <= x && x < n && !seen[x]) {
+                seen[x] = true;
+                sym_perm.push_back(x);
+            }
+        }
+    };
+
+    // Required order: all 2x2 blocks first, then all 1x1 blocks, then leftovers.
+    appendUnique(part2);
+    appendUnique(part1);
+    appendUnique(leftovers);
+
+    pairSize = part2.size();
+
+    // Defensive completion.  In the perfect/full case this loop should add nothing.
+    for (DIM i = 0; i < n; ++i) {
+        if (!seen[i]) {
+            sym_perm.push_back(i);
+        }
+    }
+}
+
+bool dkMaximumMatch(bool isSymm,
+                    const bef::CscMatrix& A,
+                    std::vector<DIM>& matchPerm,
+                    DIM& pairSize,
+                    std::vector<VALUE>*  Dr_out,
+                    std::vector<VALUE>*  Dc_out) {
+    auto start = TimeUtil::getCurrentSeconds();
+
+    MaximumMatch matcher(A);
+    MatchingResult r = matcher.run();
+    if (!r.perfect) {
+        DSS_LOGE("Maximum match failed, sz({}) != n({})", r.cardinality, A.rows);
+        DSS_LOGE("Cannot find a perfect match for this matrix.");
+        return false;
+    }
+
+    matchPerm.reserve(A.rows);
+    if (isSymm) {
+        buildSymmetricPermutation(A, r.row2Col, matchPerm, pairSize);
+    } else {
+        memcpy(matchPerm.data(), r.col2Row.data(), sizeof(DIM) * r.col2Row.size());
+    }
+
+    auto end = TimeUtil::getCurrentSeconds();
+    DSS_PERF("[Maximum match] times: {}s", end - start);
+
+    return r.perfect;
+}
+} // namespace bepss
