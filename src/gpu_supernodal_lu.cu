@@ -20,6 +20,8 @@
 
 namespace {
 
+using LuScalar = unsymmetric_lu_kernels::Scalar;
+
 void checkCuda(cudaError_t status, const char* operation)
 {
     if (status != cudaSuccess) {
@@ -78,7 +80,7 @@ struct FrontData {
     int candidate_count = 0;
     std::vector<int> row_ids;
     std::vector<int> col_ids;
-    std::vector<float> matrix;
+    std::vector<LuScalar> matrix;
 };
 
 struct FactorData {
@@ -87,7 +89,7 @@ struct FactorData {
     int delayed = 0;
     std::vector<int> row_ids;
     std::vector<int> col_ids;
-    std::vector<float> matrix;
+    std::vector<LuScalar> matrix;
 };
 
 struct GpuFrontResult {
@@ -141,9 +143,9 @@ void validateSymbolic(int n, const UnsymmetricSymbolicResult& symbolic)
     }
 }
 
-float frontScale(const FrontData& front)
+LuScalar frontScale(const FrontData& front)
 {
-    float scale = 0.0f;
+    LuScalar scale = 0.0;
     for (std::size_t i = 0; i < front.matrix.size(); ++i) {
         scale = std::max(scale, std::fabs(front.matrix[i]));
     }
@@ -151,7 +153,7 @@ float frontScale(const FrontData& front)
 }
 
 void copyToDeviceAsync(
-    DeviceArray<float>& device_matrix,
+    DeviceArray<LuScalar>& device_matrix,
     DeviceArray<int>& device_rows,
     DeviceArray<int>& device_cols,
     const FrontData& front,
@@ -159,7 +161,7 @@ void copyToDeviceAsync(
 {
     checkCuda(cudaMemcpyAsync(
         device_matrix.get(), front.matrix.data(),
-        front.matrix.size() * sizeof(float), cudaMemcpyHostToDevice, stream),
+        front.matrix.size() * sizeof(LuScalar), cudaMemcpyHostToDevice, stream),
         "copy front matrix to GPU");
     checkCuda(cudaMemcpyAsync(
         device_rows.get(), front.row_ids.data(),
@@ -173,14 +175,14 @@ void copyToDeviceAsync(
 
 void copyFromDeviceAsync(
     FactorData& factor,
-    const DeviceArray<float>& device_matrix,
+    const DeviceArray<LuScalar>& device_matrix,
     const DeviceArray<int>& device_rows,
     const DeviceArray<int>& device_cols,
     cudaStream_t stream)
 {
     checkCuda(cudaMemcpyAsync(
         factor.matrix.data(), device_matrix.get(),
-        factor.matrix.size() * sizeof(float), cudaMemcpyDeviceToHost, stream),
+        factor.matrix.size() * sizeof(LuScalar), cudaMemcpyDeviceToHost, stream),
         "copy LU front from GPU");
     checkCuda(cudaMemcpyAsync(
         factor.row_ids.data(), device_rows.get(),
@@ -193,14 +195,14 @@ void copyFromDeviceAsync(
 }
 
 void runSmallFront(
-    DeviceArray<float>& matrix,
+    DeviceArray<LuScalar>& matrix,
     DeviceArray<int>& rows,
     DeviceArray<int>& cols,
     int row_count,
     int col_count,
     int candidate_count,
-    float threshold,
-    float zero_tolerance,
+    LuScalar threshold,
+    LuScalar zero_tolerance,
     int& accepted,
     int& delayed,
     cudaStream_t stream)
@@ -221,12 +223,12 @@ void runSmallFront(
 }
 
 int selectLargePivot(
-    const DeviceArray<float>& matrix,
+    const DeviceArray<LuScalar>& matrix,
     int row_count,
     int candidate_count,
     int step,
-    float threshold,
-    float zero_tolerance,
+    LuScalar threshold,
+    LuScalar zero_tolerance,
     DeviceArray<int>& device_status,
     cudaStream_t stream)
 {
@@ -243,14 +245,14 @@ int selectLargePivot(
 }
 
 int replaceLargeColumn(
-    DeviceArray<float>& matrix,
+    DeviceArray<LuScalar>& matrix,
     DeviceArray<int>& cols,
     int row_count,
     int candidate_count,
     int step,
     int& active_end,
-    float threshold,
-    float zero_tolerance,
+    LuScalar threshold,
+    LuScalar zero_tolerance,
     DeviceArray<int>& device_status,
     cudaStream_t stream)
 {
@@ -274,7 +276,7 @@ int replaceLargeColumn(
 }
 
 void applyLargePivot(
-    DeviceArray<float>& matrix,
+    DeviceArray<LuScalar>& matrix,
     DeviceArray<int>& rows,
     int row_count,
     int col_count,
@@ -306,7 +308,7 @@ void applyLargePivot(
 }
 
 void flushLargePanel(
-    DeviceArray<float>& matrix,
+    DeviceArray<LuScalar>& matrix,
     int row_count,
     int col_count,
     int panel_begin,
@@ -318,7 +320,7 @@ void flushLargePanel(
     if (width <= 0 || right_cols <= 0) {
         return;
     }
-    const float one = 1.0f;
+    const LuScalar one = 1.0;
     checkCublas(cublasStrsm(
         cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
         CUBLAS_OP_N, CUBLAS_DIAG_UNIT, width, right_cols, &one,
@@ -330,7 +332,7 @@ void flushLargePanel(
     if (trailing_rows <= 0) {
         return;
     }
-    const float minus_one = -1.0f;
+    const LuScalar minus_one = -1.0;
     checkCublas(cublasSgemm(
         cublas, CUBLAS_OP_N, CUBLAS_OP_N,
         trailing_rows, right_cols, width, &minus_one,
@@ -341,14 +343,14 @@ void flushLargePanel(
 }
 
 void runLargeFront(
-    DeviceArray<float>& matrix,
+    DeviceArray<LuScalar>& matrix,
     DeviceArray<int>& rows,
     DeviceArray<int>& cols,
     int row_count,
     int col_count,
     int candidate_count,
     const GpuLuOptions& options,
-    float zero_tolerance,
+    LuScalar zero_tolerance,
     int& accepted,
     int& delayed,
     cudaStream_t stream)
@@ -379,8 +381,7 @@ void runLargeFront(
                     if (replacement < 0) {
                         break;
                     }
-                    panel_end = std::min(
-                        panel_begin + options.panel_size, active_end);
+                    panel_end = step + 1;
                     continue;
                 }
                 applyLargePivot(
@@ -418,7 +419,7 @@ GpuFrontResult factorFrontOnGpu(FrontData front, const GpuLuOptions& options)
     checkCuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
               "create LU front stream");
     try {
-        DeviceArray<float> device_matrix(front.matrix.size());
+        DeviceArray<LuScalar> device_matrix(front.matrix.size());
         DeviceArray<int> device_rows(front.row_ids.size());
         DeviceArray<int> device_cols(front.col_ids.size());
         copyToDeviceAsync(
@@ -427,9 +428,10 @@ GpuFrontResult factorFrontOnGpu(FrontData front, const GpuLuOptions& options)
         GpuFrontResult result;
         result.large = front.candidate_count > options.batched_width_limit;
         result.factor.candidate_count = front.candidate_count;
-        const float zero_tolerance = std::max(
-            options.absolute_pivot_tolerance,
-            options.relative_pivot_tolerance * frontScale(front));
+        const LuScalar zero_tolerance = std::max(
+            static_cast<LuScalar>(options.absolute_pivot_tolerance),
+            static_cast<LuScalar>(options.relative_pivot_tolerance) *
+                frontScale(front));
         if (result.large) {
             runLargeFront(
                 device_matrix, device_rows, device_cols, row_count, col_count,
@@ -462,7 +464,7 @@ GpuFrontResult factorFrontOnGpu(FrontData front, const GpuLuOptions& options)
 
 GpuLuOptions::GpuLuOptions()
     : batched_width_limit(64),
-      panel_size(64),
+      panel_size(1),
       concurrent_fronts(4),
       threshold_pivoting(0.1f),
       absolute_pivot_tolerance(1.0e-20f),
@@ -471,12 +473,12 @@ GpuLuOptions::GpuLuOptions()
 }
 
 GpuLuStatistics::GpuLuStatistics()
-    : single_column_nodes(0), small_medium_nodes(0), large_panel_nodes(0),
+    : single_column_nodes(0), small_medium_nodes(0), large_front_nodes(0),
       accepted_pivots(0), delayed_columns(0), unresolved_root_columns(0),
       tree_waves(0), concurrent_fronts(0),
       front_assembly_milliseconds(0.0f),
       small_medium_factorization_milliseconds(0.0f),
-      large_panel_factorization_milliseconds(0.0f),
+      large_front_factorization_milliseconds(0.0f),
       factorization_milliseconds(0.0f)
 {
 }
@@ -486,11 +488,12 @@ public:
     explicit Impl(const GpuLuOptions& options)
         : options_(options), n_(0), complete_(false)
     {
-        if (options_.batched_width_limit < 1 || options_.panel_size < 1 ||
+        if (options_.batched_width_limit < 1 || options_.panel_size != 1 ||
             options_.concurrent_fronts < 1 ||
             options_.threshold_pivoting <= 0.0f ||
             options_.threshold_pivoting > 1.0f) {
-            throw std::invalid_argument("invalid general GPU LU options");
+            throw std::invalid_argument(
+                "invalid general GPU LU options; panel_size must currently be 1");
         }
     }
 
@@ -545,7 +548,7 @@ public:
         if (rhs.size() != static_cast<std::size_t>(n_)) {
             throw std::invalid_argument("general LU right-hand side size mismatch");
         }
-        std::vector<float> work = rhs;
+        std::vector<LuScalar> work(rhs.begin(), rhs.end());
         forwardSolve(work);
         return backwardSolve(work);
     }
@@ -774,7 +777,7 @@ private:
             } else if (width <= options_.batched_width_limit) {
                 ++statistics_.small_medium_nodes;
             } else {
-                ++statistics_.large_panel_nodes;
+                ++statistics_.large_front_nodes;
             }
         }
         statistics_.front_assembly_milliseconds +=
@@ -800,7 +803,7 @@ private:
                 statistics_.delayed_columns +=
                     static_cast<std::size_t>(result.factor.delayed);
                 if (result.large) {
-                    statistics_.large_panel_factorization_milliseconds +=
+                    statistics_.large_front_factorization_milliseconds +=
                         result.milliseconds;
                 } else {
                     statistics_.small_medium_factorization_milliseconds +=
@@ -812,13 +815,13 @@ private:
         }
     }
 
-    void forwardSolve(std::vector<float>& work) const
+    void forwardSolve(std::vector<LuScalar>& work) const
     {
         for (std::size_t node = 0; node < factors_.size(); ++node) {
             const FactorData& factor = factors_[node];
             const int rows = static_cast<int>(factor.row_ids.size());
             for (int k = 0; k < factor.accepted; ++k) {
-                const float pivot_rhs =
+                const LuScalar pivot_rhs =
                     work[static_cast<std::size_t>(factor.row_ids[k])];
                 for (int row = k + 1; row < rows; ++row) {
                     work[static_cast<std::size_t>(factor.row_ids[row])] -=
@@ -829,15 +832,15 @@ private:
         }
     }
 
-    std::vector<float> backwardSolve(const std::vector<float>& work) const
+    std::vector<float> backwardSolve(const std::vector<LuScalar>& work) const
     {
-        std::vector<float> solution(static_cast<std::size_t>(n_), 0.0f);
+        std::vector<LuScalar> solution(static_cast<std::size_t>(n_), 0.0);
         for (std::size_t reverse = factors_.size(); reverse-- > 0;) {
             const FactorData& factor = factors_[reverse];
             const int rows = static_cast<int>(factor.row_ids.size());
             const int cols = static_cast<int>(factor.col_ids.size());
             for (int k = factor.accepted; k-- > 0;) {
-                float value = work[static_cast<std::size_t>(factor.row_ids[k])];
+                LuScalar value = work[static_cast<std::size_t>(factor.row_ids[k])];
                 for (int col = k + 1; col < cols; ++col) {
                     value -= factor.matrix[static_cast<std::size_t>(k + col * rows)] *
                         solution[static_cast<std::size_t>(factor.col_ids[col])];
@@ -846,7 +849,7 @@ private:
                 solution[static_cast<std::size_t>(factor.col_ids[k])] = value;
             }
         }
-        return solution;
+        return std::vector<float>(solution.begin(), solution.end());
     }
 
     GpuLuOptions options_;

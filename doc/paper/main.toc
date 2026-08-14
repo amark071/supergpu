@@ -25,7 +25,7 @@
 \contentsline {section}{\numberline {3.2}对称稠密矩阵的延迟 Bunch--Kaufman 方法}{14}{section.3.2}%
 \contentsline {subsection}{\numberline {3.2.1}Bunch--Kaufman 选主元}{15}{subsection.3.2.1}%
 \contentsline {subsection}{\numberline {3.2.2}块分解优化}{17}{subsection.3.2.2}%
-\contentsline {section}{\numberline {3.3}两种稠密矩阵分解算法的CUDA Kernel实现}{17}{section.3.3}%
+\contentsline {section}{\numberline {3.3}两种稠密矩阵分解算法的CUDA Kernel实现}{18}{section.3.3}%
 \contentsline {chapter}{\numberline {第四章\hspace {.3em}}Model 2}{19}{chapter.4}%
 \contentsline {chapter}{\numberline {第五章\hspace {.3em}}Model 3}{21}{chapter.5}%
 \contentsline {chapter}{\numberline {第六章\hspace {.3em}}总结和展望}{23}{chapter.6}%

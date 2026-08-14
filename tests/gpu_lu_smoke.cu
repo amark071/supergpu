@@ -162,7 +162,7 @@ int main()
     denseToCsc(
         band_n, band_dense, band_col_ptr, band_rows, band_values);
     const UnsymmetricOrdering band_ordering = computeColamdOrdering(
-        band_n, band_col_ptr, band_rows);
+        band_n, band_col_ptr, band_rows, band_values);
     const UnsymmetricPermutedCsc band_ordered = applyUnsymmetricPermutationCsc(
         band_n, band_col_ptr, band_rows, band_values, band_ordering);
     const UnsymmetricSymbolicResult band_symbolic = analyzeUnsymmetricSupernodes(
@@ -236,9 +236,110 @@ int main()
         large_dense, large_solution, large_rhs);
     std::cout << "large panel LU FP32 residual infinity norm = "
               << large_residual << '\n';
-    if (!large_factor.complete() || large_statistics.large_panel_nodes != 1 ||
+    if (!large_factor.complete() || large_statistics.large_front_nodes != 1 ||
         large_residual > 2.0e-3f) {
         return 6;
+    }
+
+    // An unusable column in the middle of a 65-column front forces a partial
+    // panel flush, right-to-left replacement, and propagation to the root.
+    const int delayed_large_n = 66;
+    std::vector<float> delayed_large_dense(
+        static_cast<std::size_t>(delayed_large_n * delayed_large_n), 0.0f);
+    for (int i = 0; i < 65; ++i) {
+        if (i != 10) {
+            delayed_large_dense[static_cast<std::size_t>(
+                i + i * delayed_large_n)] = 2.0f + 0.01f * i;
+        }
+    }
+    delayed_large_dense[static_cast<std::size_t>(65 + 10 * delayed_large_n)] =
+        1.0f;
+    delayed_large_dense[static_cast<std::size_t>(10 + 65 * delayed_large_n)] =
+        1.0f;
+    std::vector<int> delayed_large_col_ptr;
+    std::vector<int> delayed_large_rows;
+    std::vector<float> delayed_large_values;
+    denseToCsc(
+        delayed_large_n, delayed_large_dense, delayed_large_col_ptr,
+        delayed_large_rows, delayed_large_values);
+    UnsymmetricSymbolicResult delayed_large_symbolic;
+    delayed_large_symbolic.column_parent.assign(delayed_large_n, -1);
+    delayed_large_symbolic.column_parent[64] = 65;
+    delayed_large_symbolic.column_count.assign(delayed_large_n, 1);
+    delayed_large_symbolic.supernode_ptr = {0, 65, 66};
+    delayed_large_symbolic.supernode_parent = {1, -1};
+    delayed_large_symbolic.front_ptr = {0, 66, 67};
+    for (int id = 0; id < delayed_large_n; ++id) {
+        delayed_large_symbolic.front_indices.push_back(id);
+    }
+    delayed_large_symbolic.front_indices.push_back(65);
+    GpuSupernodalLuFactor delayed_large_factor;
+    const GpuLuStatistics delayed_large_statistics =
+        delayed_large_factor.factorize(
+            delayed_large_n, delayed_large_col_ptr, delayed_large_rows,
+            delayed_large_values, delayed_large_symbolic);
+    std::vector<float> delayed_large_rhs(
+        static_cast<std::size_t>(delayed_large_n), 0.0f);
+    for (int row = 0; row < delayed_large_n; ++row) {
+        for (int col = 0; col < delayed_large_n; ++col) {
+            delayed_large_rhs[static_cast<std::size_t>(row)] +=
+                delayed_large_dense[static_cast<std::size_t>(
+                    row + col * delayed_large_n)];
+        }
+    }
+    const std::vector<float> delayed_large_solution =
+        delayed_large_factor.solve(delayed_large_rhs);
+    const float delayed_large_residual = residualInfinity(
+        delayed_large_dense, delayed_large_solution, delayed_large_rhs);
+    std::cout << "large delayed-column LU FP32 residual infinity norm = "
+              << delayed_large_residual << '\n';
+    if (!delayed_large_factor.complete() ||
+        delayed_large_statistics.delayed_columns == 0 ||
+        delayed_large_residual > 2.0e-3f) {
+        return 7;
+    }
+
+    // Two dense three-column fronts verify a nontrivial Schur complement.
+    const int block_n = 6;
+    std::vector<float> block_dense(
+        static_cast<std::size_t>(block_n * block_n), 0.0f);
+    for (int col = 0; col < block_n; ++col) {
+        for (int row = 0; row < block_n; ++row) {
+            block_dense[static_cast<std::size_t>(row + col * block_n)] =
+                row == col
+                    ? 7.0f + 0.1f * col
+                    : 0.03f * static_cast<float>(1 + (2 * row + col) % 7);
+        }
+    }
+    std::vector<int> block_col_ptr;
+    std::vector<int> block_rows;
+    std::vector<float> block_values;
+    denseToCsc(
+        block_n, block_dense, block_col_ptr, block_rows, block_values);
+    UnsymmetricSymbolicResult block_symbolic;
+    block_symbolic.column_parent = {1, 2, 3, 4, 5, -1};
+    block_symbolic.column_count = {6, 5, 4, 3, 2, 1};
+    block_symbolic.supernode_ptr = {0, 3, 6};
+    block_symbolic.supernode_parent = {1, -1};
+    block_symbolic.front_ptr = {0, 6, 9};
+    block_symbolic.front_indices = {0, 1, 2, 3, 4, 5, 3, 4, 5};
+    GpuSupernodalLuFactor block_factor;
+    block_factor.factorize(
+        block_n, block_col_ptr, block_rows, block_values, block_symbolic);
+    std::vector<float> block_rhs(static_cast<std::size_t>(block_n), 0.0f);
+    for (int row = 0; row < block_n; ++row) {
+        for (int col = 0; col < block_n; ++col) {
+            block_rhs[static_cast<std::size_t>(row)] +=
+                block_dense[static_cast<std::size_t>(row + col * block_n)];
+        }
+    }
+    const std::vector<float> block_solution = block_factor.solve(block_rhs);
+    const float block_residual = residualInfinity(
+        block_dense, block_solution, block_rhs);
+    std::cout << "two-front Schur LU FP32 residual infinity norm = "
+              << block_residual << '\n';
+    if (!block_factor.complete() || block_residual > 2.0e-4f) {
+        return 8;
     }
     return 0;
 }

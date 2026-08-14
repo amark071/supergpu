@@ -15,7 +15,7 @@ int main()
     const std::vector<float> values(rows.size(), 1.0f);
 
     const UnsymmetricOrdering ordering = computeColamdOrdering(
-        n, col_ptr, rows);
+        n, col_ptr, rows, values);
     if (ordering.structural_rank != n) {
         std::cerr << "unexpected structural rank\n";
         return 1;

@@ -50,7 +50,7 @@ std::vector<float> permuteRightHandSide(
     std::vector<float> result(rhs.size(), 0.0f);
     for (std::size_t new_row = 0; new_row < result.size(); ++new_row) {
         result[new_row] = rhs[static_cast<std::size_t>(
-            ordering.row_perm[new_row])];
+            ordering.row_perm[new_row])] * ordering.row_scale[new_row];
     }
     return result;
 }
@@ -62,7 +62,7 @@ std::vector<float> restoreColumnOrder(
     std::vector<float> result(ordered_solution.size(), 0.0f);
     for (std::size_t new_col = 0; new_col < result.size(); ++new_col) {
         result[static_cast<std::size_t>(ordering.perm[new_col])] =
-            ordered_solution[new_col];
+            ordering.col_scale[new_col] * ordered_solution[new_col];
     }
     return result;
 }
@@ -82,7 +82,7 @@ void printSymbolicReport(
     std::cout << "Column ordering = COLAMD (CHOLMOD not used)\n";
     std::cout << "Structural matching rank = " << ordering.structural_rank
               << " / " << input.n << '\n';
-    std::cout << "COLAMD + structural matching time (ms) = "
+    std::cout << "COLAMD + numeric matching/scaling time (ms) = "
               << ordering_ms << '\n';
     std::cout << "Unsymmetric row/column permutation time (ms) = "
               << permutation_ms << '\n';
@@ -105,7 +105,7 @@ void printFactorReport(
     std::cout << "GPU LU 2--64 column fronts = "
               << statistics.small_medium_nodes << '\n';
     std::cout << "GPU LU >64 column fronts = "
-              << statistics.large_panel_nodes << '\n';
+              << statistics.large_front_nodes << '\n';
     std::cout << "Accepted unsymmetric pivots = "
               << statistics.accepted_pivots << '\n';
     std::cout << "Delayed unsymmetric columns = "
@@ -119,8 +119,8 @@ void printFactorReport(
               << statistics.front_assembly_milliseconds << '\n';
     std::cout << "Small/medium LU GPU work sum (ms) = "
               << statistics.small_medium_factorization_milliseconds << '\n';
-    std::cout << "Large panel LU GPU work sum (ms) = "
-              << statistics.large_panel_factorization_milliseconds << '\n';
+    std::cout << "Large-front right-looking GPU work sum (ms) = "
+              << statistics.large_front_factorization_milliseconds << '\n';
     std::cout << "Unsymmetric GPU factorization wall time (ms) = "
               << statistics.factorization_milliseconds << '\n';
     std::cout << "GPU general LU status = " << factor.diagnostic() << '\n';
@@ -157,7 +157,7 @@ int runUnsymmetricGpuApplication(
         const std::chrono::steady_clock::time_point ordering_begin =
             std::chrono::steady_clock::now();
         const UnsymmetricOrdering ordering = computeColamdOrdering(
-            input.n, input.col_ptr, input.row_indices);
+            input.n, input.col_ptr, input.row_indices, input.values);
         const float ordering_ms = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - ordering_begin).count();
 

@@ -7,31 +7,33 @@
 
 namespace unsymmetric_lu_kernels {
 
-__device__ inline bool usablePivot(float candidate, float column_max,
-                                   float threshold, float zero_tolerance)
+using Scalar = float;
+
+__device__ inline bool usablePivot(Scalar candidate, Scalar column_max,
+                                   Scalar threshold, Scalar zero_tolerance)
 {
     return candidate > zero_tolerance &&
         candidate >= threshold * column_max;
 }
 
 __device__ inline int choosePivotRow(
-    const float* matrix, int leading_dimension, int row_count,
-    int candidate_count, int step, int col, float threshold,
-    float zero_tolerance)
+    const Scalar* matrix, int leading_dimension, int row_count,
+    int candidate_count, int step, int col, Scalar threshold,
+    Scalar zero_tolerance)
 {
-    float column_max = 0.0f;
+    Scalar column_max = 0.0;
     for (int row = step; row < row_count; ++row) {
-        column_max = fmaxf(
-            column_max, fabsf(matrix[row + col * leading_dimension]));
+        column_max = fmax(
+            column_max, fabs(matrix[row + col * leading_dimension]));
     }
-    const float diagonal = fabsf(matrix[step + col * leading_dimension]);
+    const Scalar diagonal = fabs(matrix[step + col * leading_dimension]);
     if (usablePivot(diagonal, column_max, threshold, zero_tolerance)) {
         return step;
     }
     int pivot = -1;
-    float candidate_max = 0.0f;
+    Scalar candidate_max = 0.0;
     for (int row = step; row < candidate_count; ++row) {
-        const float value = fabsf(matrix[row + col * leading_dimension]);
+        const Scalar value = fabs(matrix[row + col * leading_dimension]);
         if (value > candidate_max) {
             candidate_max = value;
             pivot = row;
@@ -42,9 +44,9 @@ __device__ inline int choosePivotRow(
 }
 
 __global__ void factorSmallFront(
-    float* matrix, int leading_dimension, int row_count, int col_count,
-    int candidate_count, int* row_ids, int* col_ids, float threshold,
-    float zero_tolerance, int* accepted_out, int* delayed_events_out)
+    Scalar* matrix, int leading_dimension, int row_count, int col_count,
+    int candidate_count, int* row_ids, int* col_ids, Scalar threshold,
+    Scalar zero_tolerance, int* accepted_out, int* delayed_events_out)
 {
     __shared__ int step;
     __shared__ int active_end;
@@ -94,7 +96,7 @@ __global__ void factorSmallFront(
             for (int row = threadIdx.x; row < row_count; row += blockDim.x) {
                 const int a = row + step * leading_dimension;
                 const int b = row + replacement_col * leading_dimension;
-                const float temporary = matrix[a];
+                const Scalar temporary = matrix[a];
                 matrix[a] = matrix[b];
                 matrix[b] = temporary;
             }
@@ -110,7 +112,7 @@ __global__ void factorSmallFront(
             for (int col = threadIdx.x; col < col_count; col += blockDim.x) {
                 const int a = step + col * leading_dimension;
                 const int b = pivot_row + col * leading_dimension;
-                const float temporary = matrix[a];
+                const Scalar temporary = matrix[a];
                 matrix[a] = matrix[b];
                 matrix[b] = temporary;
             }
@@ -122,7 +124,7 @@ __global__ void factorSmallFront(
         }
         __syncthreads();
 
-        const float pivot = matrix[step + step * leading_dimension];
+        const Scalar pivot = matrix[step + step * leading_dimension];
         for (int row = step + 1 + threadIdx.x;
              row < row_count; row += blockDim.x) {
             matrix[row + step * leading_dimension] /= pivot;
@@ -152,8 +154,8 @@ __global__ void factorSmallFront(
 }
 
 __global__ void selectPivot(
-    const float* matrix, int leading_dimension, int row_count,
-    int candidate_count, int step, float threshold, float zero_tolerance,
+    const Scalar* matrix, int leading_dimension, int row_count,
+    int candidate_count, int step, Scalar threshold, Scalar zero_tolerance,
     int* pivot_row)
 {
     if (blockIdx.x == 0 && threadIdx.x == 0) {
@@ -164,9 +166,9 @@ __global__ void selectPivot(
 }
 
 __global__ void findReplacement(
-    const float* matrix, int leading_dimension, int row_count,
-    int candidate_count, int step, int active_end, float threshold,
-    float zero_tolerance, int* replacement_col, int* new_active_end)
+    const Scalar* matrix, int leading_dimension, int row_count,
+    int candidate_count, int step, int active_end, Scalar threshold,
+    Scalar zero_tolerance, int* replacement_col, int* new_active_end)
 {
     if (blockIdx.x == 0 && threadIdx.x == 0) {
         *replacement_col = -1;
@@ -184,14 +186,14 @@ __global__ void findReplacement(
 }
 
 __global__ void swapRows(
-    float* matrix, int leading_dimension, int col_count,
+    Scalar* matrix, int leading_dimension, int col_count,
     int first, int second, int* row_ids)
 {
     for (int col = blockIdx.x * blockDim.x + threadIdx.x;
          col < col_count; col += blockDim.x * gridDim.x) {
         const int a = first + col * leading_dimension;
         const int b = second + col * leading_dimension;
-        const float temporary = matrix[a];
+        const Scalar temporary = matrix[a];
         matrix[a] = matrix[b];
         matrix[b] = temporary;
     }
@@ -203,14 +205,14 @@ __global__ void swapRows(
 }
 
 __global__ void swapColumns(
-    float* matrix, int leading_dimension, int row_count,
+    Scalar* matrix, int leading_dimension, int row_count,
     int first, int second, int* col_ids)
 {
     for (int row = blockIdx.x * blockDim.x + threadIdx.x;
          row < row_count; row += blockDim.x * gridDim.x) {
         const int a = row + first * leading_dimension;
         const int b = row + second * leading_dimension;
-        const float temporary = matrix[a];
+        const Scalar temporary = matrix[a];
         matrix[a] = matrix[b];
         matrix[b] = temporary;
     }
@@ -222,9 +224,9 @@ __global__ void swapColumns(
 }
 
 __global__ void dividePivotColumn(
-    float* matrix, int leading_dimension, int row_count, int step)
+    Scalar* matrix, int leading_dimension, int row_count, int step)
 {
-    const float pivot = matrix[step + step * leading_dimension];
+    const Scalar pivot = matrix[step + step * leading_dimension];
     for (int row = step + 1 + blockIdx.x * blockDim.x + threadIdx.x;
          row < row_count; row += blockDim.x * gridDim.x) {
         matrix[row + step * leading_dimension] /= pivot;
@@ -232,7 +234,7 @@ __global__ void dividePivotColumn(
 }
 
 __global__ void updatePanel(
-    float* matrix, int leading_dimension, int row_count,
+    Scalar* matrix, int leading_dimension, int row_count,
     int first_col, int end_col, int step)
 {
     const int row = step + 1 + blockIdx.x * blockDim.x + threadIdx.x;

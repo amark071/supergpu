@@ -12,6 +12,7 @@ struct GpuLuOptions {
     GpuLuOptions();
 
     int batched_width_limit;
+    // Dynamic unsymmetric pivots currently require rank-1 panel flushing.
     int panel_size;
     int concurrent_fronts;
     float threshold_pivoting;
@@ -24,7 +25,7 @@ struct GpuLuStatistics {
 
     std::size_t single_column_nodes;
     std::size_t small_medium_nodes;
-    std::size_t large_panel_nodes;
+    std::size_t large_front_nodes;
     std::size_t accepted_pivots;
     std::size_t delayed_columns;
     std::size_t unresolved_root_columns;
@@ -33,7 +34,7 @@ struct GpuLuStatistics {
 
     float front_assembly_milliseconds;
     float small_medium_factorization_milliseconds;
-    float large_panel_factorization_milliseconds;
+    float large_front_factorization_milliseconds;
     float factorization_milliseconds;
 };
 
