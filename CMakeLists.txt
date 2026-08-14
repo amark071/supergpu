@@ -97,6 +97,14 @@ endif()
 target_link_libraries(cholmod_symbolic PUBLIC CUDA::cublas)
 target_compile_features(cholmod_symbolic PUBLIC cxx_std_11)
 
+add_library(symbolic_cache STATIC
+    utils/symbolic_cache.cpp
+)
+target_include_directories(symbolic_cache
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_compile_features(symbolic_cache PUBLIC cxx_std_11)
+
 add_library(gpu_supernodal_ldlt STATIC
     src/gpu_supernodal_ldlt.cu
 )
@@ -108,6 +116,28 @@ target_link_libraries(gpu_supernodal_ldlt
 )
 target_compile_features(gpu_supernodal_ldlt PUBLIC cxx_std_14 cuda_std_14)
 set_target_properties(gpu_supernodal_ldlt PROPERTIES
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+)
+
+add_library(double_symmetric_solver STATIC
+    src/double_symmetric_solver.cu
+)
+target_include_directories(double_symmetric_solver
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(double_symmetric_solver
+    PUBLIC
+        cholmod_symbolic symbolic_cache
+        CUDA::cudart CUDA::cublas Threads::Threads
+)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(double_symmetric_solver PUBLIC OpenMP::OpenMP_CXX)
+endif()
+target_compile_features(double_symmetric_solver
+    PUBLIC cxx_std_14 cuda_std_14
+)
+set_target_properties(double_symmetric_solver PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
@@ -181,11 +211,11 @@ add_executable(supernodal_gpu
     src/unsymmetric_app.cpp
     src/symbolic_pipeline.cpp
     utils/solution_verification.cpp
-    utils/symbolic_cache.cpp
 )
 target_link_libraries(supernodal_gpu
     PRIVATE
-        io_func ordering cholmod_symbolic gpu_supernodal_ldlt
+        io_func ordering cholmod_symbolic symbolic_cache gpu_supernodal_ldlt
+        double_symmetric_solver
         unsymmetric_ordering unsymmetric_symbolic
         unsymmetric_verification unsymmetric_refinement gpu_supernodal_lu
 )
@@ -228,6 +258,15 @@ if(SUPERNODAL_BUILD_TESTS)
     target_compile_features(binary_csc_io_smoke PRIVATE cxx_std_11)
     add_test(NAME binary_csc_io_smoke COMMAND binary_csc_io_smoke)
 
+    add_executable(double_symmetric_smoke
+        tests/double_symmetric_smoke.cpp)
+    target_link_libraries(double_symmetric_smoke
+        PRIVATE double_symmetric_solver)
+    target_compile_definitions(double_symmetric_smoke PRIVATE
+        DOUBLE_SYMMETRIC_SMOKE_PATH="${CMAKE_CURRENT_BINARY_DIR}/double_symmetric_smoke.bin")
+    target_compile_features(double_symmetric_smoke PRIVATE cxx_std_14)
+    add_test(NAME double_symmetric_smoke COMMAND double_symmetric_smoke)
+
 endif()
 
 set(SYMBOLIC_VISUALIZATION_DIR "${CMAKE_BINARY_DIR}/visualization")
@@ -245,7 +284,7 @@ string(TIMESTAMP start_time "%Y-%m-%d %H:%M:%S")
 string(TIMESTAMP start_epoch "%s")
 
 execute_process(
-    COMMAND "${EXECUTABLE}"
+    COMMAND "${EXECUTABLE}" ${EXECUTABLE_ARGUMENTS}
     WORKING_DIRECTORY "${WORKING_DIRECTORY}"
     OUTPUT_VARIABLE program_stdout
     ERROR_VARIABLE program_stderr
@@ -282,6 +321,19 @@ add_custom_target(run
     USES_TERMINAL
 )
 
+# 仅运行集中在double_symmetric_solver.cu中的FP64对称求解器。
+add_custom_target(run_double
+    COMMAND ${CMAKE_COMMAND}
+        "-DEXECUTABLE=$<TARGET_FILE:supernodal_gpu>"
+        "-DEXECUTABLE_ARGUMENTS=--double-symmetric-only"
+        "-DWORKING_DIRECTORY=${CMAKE_CURRENT_SOURCE_DIR}"
+        "-DLOG_FILE=${CMAKE_BINARY_DIR}/double_symmetric_solver.log"
+        -P "${CMAKE_BINARY_DIR}/RunAndLog.cmake"
+    DEPENDS supernodal_gpu
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    USES_TERMINAL
+)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_custom_target(visualize
@@ -310,7 +362,9 @@ set(PROJECT_WARNING_TARGETS
     symbolic_analysis
     ordering
     cholmod_symbolic
+    symbolic_cache
     gpu_supernodal_ldlt
+    double_symmetric_solver
     unsymmetric_matching
     unsymmetric_ordering
     unsymmetric_symbolic
@@ -333,6 +387,9 @@ if(TARGET unsymmetric_matching_smoke)
 endif()
 if(TARGET binary_csc_io_smoke)
     list(APPEND PROJECT_WARNING_TARGETS binary_csc_io_smoke)
+endif()
+if(TARGET double_symmetric_smoke)
+    list(APPEND PROJECT_WARNING_TARGETS double_symmetric_smoke)
 endif()
 if(MSVC)
     foreach(target_name IN LISTS PROJECT_WARNING_TARGETS)

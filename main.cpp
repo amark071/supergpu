@@ -9,6 +9,10 @@
 #include <iostream>
 #include <string>
 
+int runDoubleSymmetricSolver(
+    const std::string& filename,
+    bool input_is_binary_csc);
+
 namespace {
 
 enum class InputMatrixFormat {
@@ -36,6 +40,10 @@ int main(int argc, char** argv)
             input_format == InputMatrixFormat::BinaryCsc;
         const std::string input_filename =
             "data/150w/stiffness_matrix.bin";
+        if (hasArgument(argc, argv, "--double-symmetric-only")) {
+            return runDoubleSymmetricSolver(
+                input_filename, input_is_binary_csc);
+        }
         SupernodalAppFiles files;
         files.input_filename = input_filename;
         files.ordered_output_filename = "data/bin_ordered.dat";

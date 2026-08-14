@@ -1,4 +1,5 @@
 #include "cholmod_symbolic.hpp"
+#include "symbolic_cache.hpp"
 
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -7,15 +8,99 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+enum class DoubleGpuSupernodeClass {
+    SingleColumn,
+    BatchedSmallMedium,
+    LargePanel
+};
+
+struct DoubleGpuLdltOptions {
+    DoubleGpuLdltOptions();
+
+    int batched_width_limit;
+    int panel_size;
+    int max_batch_nodes;
+    int large_front_streams;
+    double bunch_kaufman_gamma;
+    double absolute_pivot_tolerance;
+    double relative_pivot_tolerance;
+    double two_by_two_tolerance;
+    bool symmetrize_input;
+};
+
+struct DoubleGpuLdltStatistics {
+    DoubleGpuLdltStatistics();
+
+    std::size_t single_column_nodes;
+    std::size_t batched_small_medium_nodes;
+    std::size_t large_panel_nodes;
+    std::size_t accepted_one_by_one_pivots;
+    std::size_t accepted_two_by_two_pivots;
+    std::size_t delayed_columns;
+    std::size_t unresolved_root_columns;
+    std::size_t tree_waves;
+    std::size_t large_front_streams;
+    bool sorted_csc_fast_path;
+    bool asynchronous_memory_pool;
+    double input_preprocessing_milliseconds;
+    double front_assembly_milliseconds;
+    double contribution_release_milliseconds;
+    double small_medium_factorization_milliseconds;
+    double large_panel_factorization_milliseconds;
+    double factor_finalization_milliseconds;
+    double factorization_milliseconds;
+    double maximum_input_asymmetry;
+};
+
+class DoubleGpuSupernodalLdltFactor {
+public:
+    explicit DoubleGpuSupernodalLdltFactor(
+        const DoubleGpuLdltOptions& options = DoubleGpuLdltOptions());
+    ~DoubleGpuSupernodalLdltFactor();
+
+    DoubleGpuSupernodalLdltFactor(
+        DoubleGpuSupernodalLdltFactor&& other) noexcept;
+    DoubleGpuSupernodalLdltFactor& operator=(
+        DoubleGpuSupernodalLdltFactor&& other) noexcept;
+
+    DoubleGpuSupernodalLdltFactor(
+        const DoubleGpuSupernodalLdltFactor&) = delete;
+    DoubleGpuSupernodalLdltFactor& operator=(
+        const DoubleGpuSupernodalLdltFactor&) = delete;
+
+    DoubleGpuLdltStatistics factorize(
+        int n,
+        const std::vector<int>& col_ptr,
+        const std::vector<int>& row_indices,
+        const std::vector<double>& values,
+        const CholmodSymbolicResult& symbolic);
+    std::vector<double> solve(
+        const std::vector<double>& reordered_rhs) const;
+    bool complete() const;
+    const DoubleGpuLdltStatistics& statistics() const;
+    const std::string& diagnostic() const;
+
+private:
+    class Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 namespace {
 
@@ -1218,7 +1303,7 @@ public:
     {
         validateOptions();
         checkCublas(cublasCreate(&cublas_), "cublasCreate");
-        // Keep FP64 input, output, and accumulation; do not reduce SGEMM to TF32.
+        // Keep FP64 input, output, and accumulation throughout the dense update.
         checkCublas(cublasSetMathMode(cublas_, CUBLAS_PEDANTIC_MATH),
                     "cublasSetMathMode");
         initializeLargeFrontStreams();
@@ -1273,9 +1358,12 @@ public:
 
             checkCuda(cudaEventRecord(stop), "cudaEventRecord(stop)");
             checkCuda(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
+            float gpu_elapsed_milliseconds = 0.0f;
             checkCuda(cudaEventElapsedTime(
-                          &statistics_.factorization_milliseconds, start, stop),
+                          &gpu_elapsed_milliseconds, start, stop),
                       "cudaEventElapsedTime");
+            statistics_.factorization_milliseconds =
+                static_cast<double>(gpu_elapsed_milliseconds);
             cudaEventDestroy(stop);
             cudaEventDestroy(start);
         } catch (...) {
@@ -2008,11 +2096,11 @@ private:
                         &beta,
                         front.values + step + step * front.order,
                         front.order),
-                    "flush large BK panel with SGEMM");
+                    "flush large BK panel with DGEMM");
         const int total = remaining * remaining;
         mirrorLowerToUpperKernel<<<(total + 255) / 256, 256, 0, stream>>>(
             front.values, front.order, step);
-        checkCuda(cudaGetLastError(), "mirror SGEMM Schur update");
+        checkCuda(cudaGetLastError(), "mirror DGEMM Schur update");
     }
 
     void factorLarge(
@@ -2414,4 +2502,672 @@ const DoubleGpuLdltStatistics& DoubleGpuSupernodalLdltFactor::statistics() const
 const std::string& DoubleGpuSupernodalLdltFactor::diagnostic() const
 {
     return impl_->diagnostic();
+}
+
+namespace {
+
+const std::uint64_t kDoubleBinaryHeaderBytes = 1U + 4U + 4U + 8U;
+const std::size_t kDoubleReadChunkEntries = 1U << 20;
+
+struct DoubleInputMatrix {
+    int n = 0;
+    int nnz = 0;
+    std::vector<int> col_ptr;
+    std::vector<int> row_indices;
+    std::vector<double> values;
+};
+
+struct DoubleSymbolicPipeline {
+    CholmodSymbolicResult symbolic;
+    std::vector<int> col_ptr;
+    std::vector<int> row_indices;
+    std::vector<double> values;
+    bool cache_hit = false;
+    double analysis_milliseconds = 0.0;
+    double permutation_milliseconds = 0.0;
+};
+
+struct DoubleSymmetricAccumulator {
+    double lower = 0.0;
+    double upper = 0.0;
+    int lower_count = 0;
+    int upper_count = 0;
+};
+
+typedef std::unordered_map<std::uint64_t, DoubleSymmetricAccumulator>
+    DoubleSymmetricEntries;
+
+struct DoubleVerification {
+    double matrix_norm = 0.0;
+    double rhs_norm = 0.0;
+    double solution_norm = 0.0;
+    double absolute_residual = 0.0;
+    double relative_residual = 0.0;
+    double backward_error = 0.0;
+    double solution_error = 0.0;
+    double solve_milliseconds = 0.0;
+    double tolerance = std::sqrt(std::numeric_limits<double>::epsilon());
+    bool passed = false;
+};
+
+template <class T>
+void readDoubleExact(
+    std::ifstream& file,
+    T* destination,
+    std::size_t count,
+    const char* field)
+{
+    if (count == 0) {
+        return;
+    }
+    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
+        throw std::runtime_error(std::string(field) + " is too large to read");
+    }
+    const std::size_t bytes = count * sizeof(T);
+    if (bytes > static_cast<std::size_t>(
+                    std::numeric_limits<std::streamsize>::max())) {
+        throw std::runtime_error(std::string(field) + " is too large to read");
+    }
+    file.read(
+        reinterpret_cast<char*>(destination),
+        static_cast<std::streamsize>(bytes));
+    if (!file) {
+        throw std::runtime_error(
+            std::string("truncated binary CSC while reading ") + field);
+    }
+}
+
+std::uint64_t doubleBinaryFileSize(std::ifstream& file)
+{
+    file.seekg(0, std::ios::end);
+    const std::streampos end = file.tellg();
+    if (end < 0) {
+        throw std::runtime_error("cannot determine binary CSC file size");
+    }
+    file.seekg(0, std::ios::beg);
+    return static_cast<std::uint64_t>(end);
+}
+
+bool doubleBinarySizeMatches(
+    std::int32_t columns,
+    std::int64_t nonzeros,
+    std::uint64_t file_size)
+{
+    if (columns < 0 || nonzeros < 0 ||
+        nonzeros > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    const std::uint64_t column_count =
+        static_cast<std::uint64_t>(columns) + 1U;
+    const std::uint64_t fixed_bytes = kDoubleBinaryHeaderBytes +
+        column_count * sizeof(std::int64_t);
+    const std::uint64_t entry_bytes = sizeof(std::int32_t) + sizeof(double);
+    const std::uint64_t count = static_cast<std::uint64_t>(nonzeros);
+    if (count > (std::numeric_limits<std::uint64_t>::max() - fixed_bytes) /
+                    entry_bytes) {
+        return false;
+    }
+    return fixed_bytes + count * entry_bytes == file_size;
+}
+
+std::int64_t decodeDoubleNonzeroCount(
+    std::uint64_t raw,
+    std::int32_t columns,
+    std::uint64_t file_size)
+{
+    std::int64_t integer_count = 0;
+    double floating_count = 0.0;
+    std::memcpy(&integer_count, &raw, sizeof(integer_count));
+    std::memcpy(&floating_count, &raw, sizeof(floating_count));
+    if (doubleBinarySizeMatches(columns, integer_count, file_size)) {
+        return integer_count;
+    }
+    if (std::isfinite(floating_count) && floating_count >= 0.0 &&
+        floating_count <= static_cast<double>(
+            std::numeric_limits<int>::max()) &&
+        std::floor(floating_count) == floating_count) {
+        const std::int64_t converted =
+            static_cast<std::int64_t>(floating_count);
+        if (doubleBinarySizeMatches(columns, converted, file_size)) {
+            return converted;
+        }
+    }
+    throw std::runtime_error(
+        "binary CSC nnz/header does not match the file length");
+}
+
+int readDoubleColumnPointers(
+    std::ifstream& file,
+    DoubleInputMatrix& matrix)
+{
+    matrix.col_ptr.resize(static_cast<std::size_t>(matrix.n + 1));
+    std::vector<std::int64_t> buffer(std::min<std::size_t>(
+        kDoubleReadChunkEntries, matrix.col_ptr.size()));
+    std::int64_t previous = -1;
+    int index_base = -1;
+    for (std::size_t offset = 0; offset < matrix.col_ptr.size();) {
+        const std::size_t count =
+            std::min(buffer.size(), matrix.col_ptr.size() - offset);
+        readDoubleExact(file, buffer.data(), count, "column pointers");
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::int64_t raw = buffer[i];
+            if (offset == 0 && i == 0) {
+                if (raw != 0 && raw != 1) {
+                    throw std::runtime_error(
+                        "binary CSC column pointers must start at 0 or 1");
+                }
+                index_base = static_cast<int>(raw);
+            }
+            const std::int64_t normalized = raw - index_base;
+            if (normalized < previous || normalized < 0 ||
+                normalized > matrix.nnz) {
+                throw std::runtime_error(
+                    "binary CSC column pointers are invalid or non-monotonic");
+            }
+            matrix.col_ptr[offset + i] = static_cast<int>(normalized);
+            previous = normalized;
+        }
+        offset += count;
+    }
+    if (matrix.col_ptr.back() != matrix.nnz) {
+        throw std::runtime_error("binary CSC final column pointer differs from nnz");
+    }
+    return index_base;
+}
+
+void readDoubleRows(
+    std::ifstream& file,
+    int index_base,
+    DoubleInputMatrix& matrix)
+{
+    matrix.row_indices.resize(static_cast<std::size_t>(matrix.nnz));
+    std::vector<std::int32_t> buffer(std::min<std::size_t>(
+        kDoubleReadChunkEntries, matrix.row_indices.size()));
+    for (std::size_t offset = 0; offset < matrix.row_indices.size();) {
+        const std::size_t count =
+            std::min(buffer.size(), matrix.row_indices.size() - offset);
+        readDoubleExact(file, buffer.data(), count, "row indices");
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::int64_t row =
+                static_cast<std::int64_t>(buffer[i]) - index_base;
+            if (row < 0 || row >= matrix.n) {
+                throw std::runtime_error("binary CSC row index is out of range");
+            }
+            matrix.row_indices[offset + i] = static_cast<int>(row);
+        }
+        offset += count;
+    }
+}
+
+void readDoubleValues(std::ifstream& file, DoubleInputMatrix& matrix)
+{
+    matrix.values.resize(static_cast<std::size_t>(matrix.nnz));
+    for (std::size_t offset = 0; offset < matrix.values.size();) {
+        const std::size_t count = std::min(
+            kDoubleReadChunkEntries, matrix.values.size() - offset);
+        readDoubleExact(
+            file, matrix.values.data() + offset, count, "matrix values");
+        for (std::size_t i = 0; i < count; ++i) {
+            if (!std::isfinite(matrix.values[offset + i])) {
+                throw std::runtime_error("binary CSC contains a non-finite value");
+            }
+        }
+        offset += count;
+    }
+}
+
+DoubleInputMatrix readDoubleBinaryCsc(const std::string& filename)
+{
+    std::ifstream file(filename.c_str(), std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("cannot open input matrix file: " + filename);
+    }
+    const std::uint64_t file_size = doubleBinaryFileSize(file);
+    std::int8_t sparse = 0;
+    std::int32_t columns = 0;
+    std::int32_t rows = 0;
+    std::uint64_t raw_nnz = 0;
+    readDoubleExact(file, &sparse, 1, "sparse flag");
+    readDoubleExact(file, &columns, 1, "column count");
+    readDoubleExact(file, &rows, 1, "row count");
+    readDoubleExact(file, &raw_nnz, 1, "nonzero count");
+    if (sparse != 1 || columns <= 0 || rows != columns) {
+        throw std::runtime_error(
+            "binary input must be a nonempty square sparse CSC matrix");
+    }
+
+    DoubleInputMatrix matrix;
+    matrix.n = static_cast<int>(columns);
+    matrix.nnz = static_cast<int>(
+        decodeDoubleNonzeroCount(raw_nnz, columns, file_size));
+    const int index_base = readDoubleColumnPointers(file, matrix);
+    readDoubleRows(file, index_base, matrix);
+    readDoubleValues(file, matrix);
+    return matrix;
+}
+
+DoubleInputMatrix readDoubleTextCsc(const std::string& filename)
+{
+    std::ifstream file(filename.c_str());
+    if (!file) {
+        throw std::runtime_error("cannot open input matrix file: " + filename);
+    }
+    int rows = 0;
+    DoubleInputMatrix matrix;
+    if (!(file >> rows >> matrix.n) || matrix.n <= 0 || rows != matrix.n) {
+        throw std::runtime_error("input matrix must be a valid square matrix");
+    }
+    matrix.col_ptr.resize(static_cast<std::size_t>(matrix.n + 1));
+    for (int i = 0; i <= matrix.n; ++i) {
+        if (!(file >> matrix.col_ptr[static_cast<std::size_t>(i)])) {
+            throw std::runtime_error("failed to read CSC column pointers");
+        }
+        --matrix.col_ptr[static_cast<std::size_t>(i)];
+    }
+    if (matrix.col_ptr.front() != 0 || matrix.col_ptr.back() < 0) {
+        throw std::runtime_error("text CSC column pointers must be one-based");
+    }
+    matrix.nnz = matrix.col_ptr.back();
+    matrix.row_indices.resize(static_cast<std::size_t>(matrix.nnz));
+    matrix.values.resize(static_cast<std::size_t>(matrix.nnz));
+    for (int i = 0; i < matrix.nnz; ++i) {
+        if (!(file >> matrix.row_indices[static_cast<std::size_t>(i)])) {
+            throw std::runtime_error("failed to read CSC row indices");
+        }
+        --matrix.row_indices[static_cast<std::size_t>(i)];
+    }
+    for (int i = 0; i < matrix.nnz; ++i) {
+        if (!(file >> matrix.values[static_cast<std::size_t>(i)])) {
+            throw std::runtime_error("failed to read CSC values");
+        }
+    }
+    return matrix;
+}
+
+void validateDoublePermutation(
+    const DoubleInputMatrix& matrix,
+    const std::vector<int>& iperm)
+{
+    if (matrix.col_ptr.size() != static_cast<std::size_t>(matrix.n + 1) ||
+        matrix.row_indices.size() != matrix.values.size() ||
+        matrix.col_ptr.front() != 0 || matrix.col_ptr.back() != matrix.nnz ||
+        iperm.size() != static_cast<std::size_t>(matrix.n)) {
+        throw std::invalid_argument("invalid double CSC or permutation shape");
+    }
+    std::vector<bool> seen(static_cast<std::size_t>(matrix.n), false);
+    for (int old = 0; old < matrix.n; ++old) {
+        const int reordered = iperm[static_cast<std::size_t>(old)];
+        if (reordered < 0 || reordered >= matrix.n ||
+            seen[static_cast<std::size_t>(reordered)]) {
+            throw std::invalid_argument("symbolic inverse permutation is invalid");
+        }
+        seen[static_cast<std::size_t>(reordered)] = true;
+    }
+}
+
+DoubleInputMatrix permuteDoubleSymmetricCsc(
+    const DoubleInputMatrix& input,
+    const std::vector<int>& iperm)
+{
+    validateDoublePermutation(input, iperm);
+    typedef std::pair<int, double> Entry;
+    DoubleInputMatrix output;
+    output.n = input.n;
+    output.nnz = input.nnz;
+    output.col_ptr.assign(static_cast<std::size_t>(input.n + 1), 0);
+    for (int old_col = 0; old_col < input.n; ++old_col) {
+        const int new_col = iperm[static_cast<std::size_t>(old_col)];
+        output.col_ptr[static_cast<std::size_t>(new_col + 1)] +=
+            input.col_ptr[static_cast<std::size_t>(old_col + 1)] -
+            input.col_ptr[static_cast<std::size_t>(old_col)];
+    }
+    for (int col = 0; col < input.n; ++col) {
+        output.col_ptr[static_cast<std::size_t>(col + 1)] +=
+            output.col_ptr[static_cast<std::size_t>(col)];
+    }
+
+    std::vector<Entry> entries(input.values.size());
+    std::vector<int> next = output.col_ptr;
+    for (int old_col = 0; old_col < input.n; ++old_col) {
+        const int new_col = iperm[static_cast<std::size_t>(old_col)];
+        for (int p = input.col_ptr[static_cast<std::size_t>(old_col)];
+             p < input.col_ptr[static_cast<std::size_t>(old_col + 1)]; ++p) {
+            const int old_row = input.row_indices[static_cast<std::size_t>(p)];
+            if (old_row < 0 || old_row >= input.n) {
+                throw std::invalid_argument("CSC row index is out of range");
+            }
+            const int position = next[static_cast<std::size_t>(new_col)]++;
+            entries[static_cast<std::size_t>(position)] = Entry(
+                iperm[static_cast<std::size_t>(old_row)],
+                input.values[static_cast<std::size_t>(p)]);
+        }
+    }
+
+    output.row_indices.resize(entries.size());
+    output.values.resize(entries.size());
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 64) if(input.n >= 1024)
+#endif
+    for (int col = 0; col < input.n; ++col) {
+        const int begin = output.col_ptr[static_cast<std::size_t>(col)];
+        const int end = output.col_ptr[static_cast<std::size_t>(col + 1)];
+        std::sort(
+            entries.begin() + begin, entries.begin() + end,
+            [](const Entry& lhs, const Entry& rhs) {
+                return lhs.first < rhs.first;
+            });
+        for (int p = begin; p < end; ++p) {
+            output.row_indices[static_cast<std::size_t>(p)] =
+                entries[static_cast<std::size_t>(p)].first;
+            output.values[static_cast<std::size_t>(p)] =
+                entries[static_cast<std::size_t>(p)].second;
+        }
+    }
+    return output;
+}
+
+DoubleSymbolicPipeline runDoubleSymbolicPipeline(
+    const DoubleInputMatrix& input,
+    const std::string& cache_path)
+{
+    DoubleSymbolicPipeline pipeline;
+    const std::uint64_t hash = symbolicStructureHash(
+        input.n, input.col_ptr, input.row_indices);
+    pipeline.cache_hit = loadSymbolicCache(
+        cache_path, input.n, input.row_indices.size(), hash,
+        pipeline.symbolic);
+    if (!pipeline.cache_hit) {
+        const HostClock::time_point begin = HostClock::now();
+        pipeline.symbolic = analyzeAndOrderBasicSupernodesWithCholmod(
+            input.n, input.col_ptr, input.row_indices);
+        pipeline.analysis_milliseconds = elapsedMilliseconds(
+            begin, HostClock::now());
+        saveSymbolicCache(
+            cache_path, input.n, input.row_indices.size(), hash,
+            pipeline.symbolic);
+    }
+    const HostClock::time_point permutation_begin = HostClock::now();
+    DoubleInputMatrix ordered = permuteDoubleSymmetricCsc(
+        input, pipeline.symbolic.iperm);
+    pipeline.permutation_milliseconds = elapsedMilliseconds(
+        permutation_begin, HostClock::now());
+    pipeline.col_ptr.swap(ordered.col_ptr);
+    pipeline.row_indices.swap(ordered.row_indices);
+    pipeline.values.swap(ordered.values);
+    return pipeline;
+}
+
+std::uint64_t doubleSymmetricKey(int row, int col)
+{
+    const std::uint32_t high = static_cast<std::uint32_t>(std::max(row, col));
+    const std::uint32_t low = static_cast<std::uint32_t>(std::min(row, col));
+    return (static_cast<std::uint64_t>(high) << 32) | low;
+}
+
+DoubleSymmetricEntries buildDoubleSymmetricEntries(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices,
+    const std::vector<double>& values)
+{
+    DoubleSymmetricEntries entries;
+    entries.reserve(values.size());
+    for (int col = 0; col < n; ++col) {
+        for (int p = col_ptr[static_cast<std::size_t>(col)];
+             p < col_ptr[static_cast<std::size_t>(col + 1)]; ++p) {
+            const int row = row_indices[static_cast<std::size_t>(p)];
+            DoubleSymmetricAccumulator& accumulator =
+                entries[doubleSymmetricKey(row, col)];
+            if (row >= col) {
+                accumulator.lower += values[static_cast<std::size_t>(p)];
+                ++accumulator.lower_count;
+            } else {
+                accumulator.upper += values[static_cast<std::size_t>(p)];
+                ++accumulator.upper_count;
+            }
+        }
+    }
+    return entries;
+}
+
+double doubleSymmetricValue(
+    int row,
+    int col,
+    const DoubleSymmetricAccumulator& accumulator,
+    bool symmetrize)
+{
+    if (row == col) {
+        return accumulator.lower + accumulator.upper;
+    }
+    if (accumulator.lower_count != 0 && accumulator.upper_count != 0) {
+        return symmetrize
+            ? 0.5 * (accumulator.lower + accumulator.upper)
+            : accumulator.lower;
+    }
+    return accumulator.lower_count != 0
+        ? accumulator.lower : accumulator.upper;
+}
+
+std::vector<double> doubleSymmetricMatvec(
+    int n,
+    const DoubleSymmetricEntries& entries,
+    bool symmetrize,
+    const std::vector<double>& x,
+    double* matrix_norm)
+{
+    std::vector<double> result(static_cast<std::size_t>(n), 0.0);
+    std::vector<double> row_sums(static_cast<std::size_t>(n), 0.0);
+    for (DoubleSymmetricEntries::const_iterator it = entries.begin();
+         it != entries.end(); ++it) {
+        const int row = static_cast<int>(it->first >> 32);
+        const int col = static_cast<int>(it->first & 0xffffffffu);
+        const double value = doubleSymmetricValue(
+            row, col, it->second, symmetrize);
+        result[static_cast<std::size_t>(row)] +=
+            value * x[static_cast<std::size_t>(col)];
+        row_sums[static_cast<std::size_t>(row)] += std::fabs(value);
+        if (row != col) {
+            result[static_cast<std::size_t>(col)] +=
+                value * x[static_cast<std::size_t>(row)];
+            row_sums[static_cast<std::size_t>(col)] += std::fabs(value);
+        }
+    }
+    if (matrix_norm != 0) {
+        *matrix_norm = *std::max_element(row_sums.begin(), row_sums.end());
+    }
+    return result;
+}
+
+double doubleInfinityNorm(const std::vector<double>& values)
+{
+    double norm = 0.0;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        norm = std::max(norm, std::fabs(values[i]));
+    }
+    return norm;
+}
+
+double doubleSafeRatio(double numerator, double denominator)
+{
+    if (denominator > 0.0) {
+        return numerator / denominator;
+    }
+    return numerator == 0.0
+        ? 0.0 : std::numeric_limits<double>::infinity();
+}
+
+DoubleVerification verifyDoubleSolution(
+    int n,
+    const DoubleSymmetricEntries& entries,
+    bool symmetrize,
+    const std::vector<double>& rhs,
+    const std::vector<double>& solution,
+    const std::vector<double>& expected,
+    double solve_milliseconds)
+{
+    DoubleVerification verification;
+    verification.solve_milliseconds = solve_milliseconds;
+    const std::vector<double> product = doubleSymmetricMatvec(
+        n, entries, symmetrize, solution, &verification.matrix_norm);
+    for (int i = 0; i < n; ++i) {
+        verification.absolute_residual = std::max(
+            verification.absolute_residual,
+            std::fabs(product[static_cast<std::size_t>(i)] -
+                      rhs[static_cast<std::size_t>(i)]));
+        verification.solution_error = std::max(
+            verification.solution_error,
+            std::fabs(solution[static_cast<std::size_t>(i)] -
+                      expected[static_cast<std::size_t>(i)]));
+    }
+    verification.rhs_norm = doubleInfinityNorm(rhs);
+    verification.solution_norm = doubleInfinityNorm(solution);
+    verification.relative_residual = doubleSafeRatio(
+        verification.absolute_residual, verification.rhs_norm);
+    verification.backward_error = doubleSafeRatio(
+        verification.absolute_residual,
+        verification.matrix_norm * verification.solution_norm +
+            verification.rhs_norm);
+    verification.solution_error = doubleSafeRatio(
+        verification.solution_error, doubleInfinityNorm(expected));
+    verification.passed = std::isfinite(verification.backward_error) &&
+        verification.backward_error <= verification.tolerance;
+    return verification;
+}
+
+void printDoubleFactorReport(
+    const DoubleGpuLdltStatistics& statistics,
+    const DoubleGpuSupernodalLdltFactor& factor)
+{
+    std::cout << "GPU single-column nodes = "
+              << statistics.single_column_nodes << '\n';
+    std::cout << "GPU 2--64 column nodes = "
+              << statistics.batched_small_medium_nodes << '\n';
+    std::cout << "GPU >64 column nodes = "
+              << statistics.large_panel_nodes << '\n';
+    std::cout << "Accepted 1x1 pivots = "
+              << statistics.accepted_one_by_one_pivots << '\n';
+    std::cout << "Accepted 2x2 pivot blocks = "
+              << statistics.accepted_two_by_two_pivots << '\n';
+    std::cout << "Delayed pivot events = "
+              << statistics.delayed_columns << '\n';
+    std::cout << "Unresolved root columns = "
+              << statistics.unresolved_root_columns << '\n';
+    std::cout << "Supernode tree waves = " << statistics.tree_waves << '\n';
+    std::cout << "Concurrent large-front CUDA streams = "
+              << statistics.large_front_streams << '\n';
+    std::cout << "CUDA asynchronous memory pool = "
+              << (statistics.asynchronous_memory_pool ? "enabled" : "fallback")
+              << '\n';
+    std::cout << "FP64 input preprocessing time (ms) = "
+              << statistics.input_preprocessing_milliseconds << '\n';
+    std::cout << "FP64 front assembly time (ms) = "
+              << statistics.front_assembly_milliseconds << '\n';
+    std::cout << "FP64 small/medium factor time (ms) = "
+              << statistics.small_medium_factorization_milliseconds << '\n';
+    std::cout << "FP64 large panel factor time (ms) = "
+              << statistics.large_panel_factorization_milliseconds << '\n';
+    std::cout << "FP64 GPU factorization time (ms) = "
+              << statistics.factorization_milliseconds << '\n';
+    std::cout << "GPU FP64 LDLT status = " << factor.diagnostic() << '\n';
+}
+
+void printDoubleVerification(const DoubleVerification& result)
+{
+    std::cout << std::scientific << std::setprecision(12);
+    std::cout << "FP64 solve verification x_true = all ones\n";
+    std::cout << "FP64 GPU solve time (ms) = "
+              << result.solve_milliseconds << '\n';
+    std::cout << "Matrix infinity norm = " << result.matrix_norm << '\n';
+    std::cout << "RHS infinity norm = " << result.rhs_norm << '\n';
+    std::cout << "Solution infinity norm = " << result.solution_norm << '\n';
+    std::cout << "Absolute residual ||A*x-b||_inf = "
+              << result.absolute_residual << '\n';
+    std::cout << "Relative residual ||A*x-b||_inf/||b||_inf = "
+              << result.relative_residual << '\n';
+    std::cout << "Scaled backward error = " << result.backward_error << '\n';
+    std::cout << "Relative solution error = " << result.solution_error << '\n';
+    std::cout << "FP64 verification tolerance = " << result.tolerance << '\n';
+    std::cout << "FP64 residual verification = "
+              << (result.passed ? "PASS" : "WARNING") << '\n';
+}
+
+} // namespace
+
+int runDoubleSymmetricSolver(
+    const std::string& filename,
+    bool input_is_binary_csc)
+{
+    try {
+        const HostClock::time_point input_begin = HostClock::now();
+        const DoubleInputMatrix input = input_is_binary_csc
+            ? readDoubleBinaryCsc(filename)
+            : readDoubleTextCsc(filename);
+        const double input_milliseconds = elapsedMilliseconds(
+            input_begin, HostClock::now());
+        DoubleSymbolicPipeline pipeline = runDoubleSymbolicPipeline(
+            input, "symbolic_analysis_double.cache");
+
+        std::size_t factor_nonzeros = 0;
+        for (std::size_t i = 0;
+             i < pipeline.symbolic.column_count.size(); ++i) {
+            factor_nonzeros += static_cast<std::size_t>(
+                pipeline.symbolic.column_count[i]);
+        }
+        std::cout << "\n=== Double-precision symmetric sparse LDLT ===\n";
+        std::cout << "Matrix = " << input.n << 'x' << input.n
+                  << ", nonzero = " << input.nnz << '\n';
+        std::cout << "Input format = "
+                  << (input_is_binary_csc ? "binary CSC" : "text CSC")
+                  << '\n';
+        std::cout << "FP64 matrix read time (ms) = "
+                  << input_milliseconds << '\n';
+        std::cout << "Selected ordering method = CHOLMOD-METIS fast path\n";
+        std::cout << "Symbolic cache = "
+                  << (pipeline.cache_hit ? "hit" : "miss; cache updated")
+                  << '\n';
+        std::cout << "CHOLMOD ordering and symbolic analysis time (ms) = "
+                  << pipeline.analysis_milliseconds << '\n';
+        std::cout << "FP64 symmetric CSC permutation time (ms) = "
+                  << pipeline.permutation_milliseconds << '\n';
+        std::cout << "Selected symbolic factor L nonzeros = "
+                  << factor_nonzeros << '\n';
+        std::cout << "Basic supernodes = "
+                  << pipeline.symbolic.supernode_parent.size() << '\n';
+
+        DoubleGpuLdltOptions options;
+        options.batched_width_limit = 64;
+        options.panel_size = 64;
+        options.max_batch_nodes = 256;
+        options.large_front_streams = 4;
+        DoubleGpuSupernodalLdltFactor factor(options);
+        const DoubleGpuLdltStatistics statistics = factor.factorize(
+            input.n, pipeline.col_ptr, pipeline.row_indices,
+            pipeline.values, pipeline.symbolic);
+        printDoubleFactorReport(statistics, factor);
+        if (!factor.complete()) {
+            return 20;
+        }
+
+        const DoubleSymmetricEntries entries =
+            buildDoubleSymmetricEntries(
+                input.n, pipeline.col_ptr, pipeline.row_indices,
+                pipeline.values);
+        const std::vector<double> expected(
+            static_cast<std::size_t>(input.n), 1.0);
+        const std::vector<double> rhs = doubleSymmetricMatvec(
+            input.n, entries, options.symmetrize_input, expected, 0);
+        const HostClock::time_point solve_begin = HostClock::now();
+        const std::vector<double> solution = factor.solve(rhs);
+        const double solve_milliseconds = elapsedMilliseconds(
+            solve_begin, HostClock::now());
+        const DoubleVerification verification = verifyDoubleSolution(
+            input.n, entries, options.symmetrize_input, rhs,
+            solution, expected, solve_milliseconds);
+        printDoubleVerification(verification);
+        return verification.passed ? 0 : 21;
+    } catch (const std::exception& error) {
+        std::cerr << "Double symmetric GPU LDLT failed: "
+                  << error.what() << '\n';
+        return 22;
+    }
 }
