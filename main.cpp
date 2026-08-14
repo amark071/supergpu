@@ -5,6 +5,22 @@
 #define SUPERNODAL_VISUALIZATION_DIR "."
 #endif
 
+#include <string>
+
+namespace {
+
+bool hasArgument(int argc, char** argv, const char* option)
+{
+    for (int argument = 1; argument < argc; ++argument) {
+        if (std::string(argv[argument]) == option) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 int main(int argc, char** argv)
 {
     SupernodalAppFiles files;
@@ -17,6 +33,8 @@ int main(int argc, char** argv)
     unsymmetric_files.input_filename = "data/A_1215.dat";
     unsymmetric_files.ordered_output_filename =
         "data/A_1215_unsymmetric_ordered.dat";
+    unsymmetric_files.matching_enabled =
+        !hasArgument(argc, argv, "--disable-matching");
 
     const int symmetric_status =
         runSupernodalGpuApplication(argc, argv, files);

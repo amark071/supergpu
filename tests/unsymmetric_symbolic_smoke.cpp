@@ -60,6 +60,27 @@ int main()
             }
         }
     }
+    const UnsymmetricOrdering amd_only = computeAmdOnlyOrdering(
+        n, col_ptr, rows);
+    if (amd_only.structural_rank != -1 ||
+        amd_only.row_perm != amd_only.perm ||
+        amd_only.row_iperm != amd_only.iperm ||
+        !std::all_of(
+            amd_only.row_scale.begin(), amd_only.row_scale.end(),
+            [](float value) { return value == 1.0f; }) ||
+        !std::all_of(
+            amd_only.col_scale.begin(), amd_only.col_scale.end(),
+            [](float value) { return value == 1.0f; })) {
+        std::cerr << "AMD-only ordering unexpectedly used matching state\n";
+        return 4;
+    }
+    const UnsymmetricPermutedCsc amd_only_matrix =
+        applyUnsymmetricPermutationCsc(
+            n, col_ptr, rows, values, amd_only);
+    if (amd_only_matrix.values.size() != values.size()) {
+        std::cerr << "AMD-only permutation lost matrix entries\n";
+        return 5;
+    }
     std::cout << "matching, AMD, and symbolic envelope smoke test passed\n";
     return 0;
 }

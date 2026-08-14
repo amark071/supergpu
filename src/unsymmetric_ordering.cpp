@@ -181,6 +181,28 @@ UnsymmetricOrdering computeMatchingAmdOrdering(
     return result;
 }
 
+UnsymmetricOrdering computeAmdOnlyOrdering(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices)
+{
+    validateCsc(n, col_ptr, row_indices, 0);
+    AmdOrdering amd;
+    if (n > 0) {
+        amd = computeAmdOrdering(n, col_ptr, row_indices);
+    }
+    UnsymmetricOrdering result;
+    result.perm = amd.perm;
+    result.iperm = amd.iperm;
+    result.row_perm = amd.perm;
+    result.row_iperm = amd.iperm;
+    result.row_scale.assign(static_cast<std::size_t>(n), 1.0f);
+    result.col_scale.assign(static_cast<std::size_t>(n), 1.0f);
+    result.structural_rank = -1;
+    validatePermutation(n, result);
+    return result;
+}
+
 UnsymmetricOrdering computeMatchingAmdOrdering(
     int n,
     const std::vector<int>& col_ptr,

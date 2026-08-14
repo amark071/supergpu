@@ -5,12 +5,12 @@
 
 struct UnsymmetricOrdering {
     // perm[new_column] is the original column; iperm[old_column] is its
-    // position after matching followed by AMD.
+    // position after the selected unsymmetric ordering pipeline.
     std::vector<int> perm;
     std::vector<int> iperm;
 
-    // Duff--Koster weighted matching supplies the initial row permutation.
-    // Numerical row pivoting still occurs during factorization.
+    // With matching enabled, Duff--Koster supplies the initial row
+    // permutation. AMD-only mode applies perm to both rows and columns.
     std::vector<int> row_perm;
     std::vector<int> row_iperm;
 
@@ -18,6 +18,7 @@ struct UnsymmetricOrdering {
     std::vector<float> row_scale;
     std::vector<float> col_scale;
 
+    // Negative when structural matching was disabled and rank was not tested.
     int structural_rank = 0;
 };
 
@@ -39,6 +40,13 @@ UnsymmetricOrdering computeMatchingAmdOrdering(
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
     const std::vector<float>& values);
+
+// Apply AMD directly to the original structural envelope. Rows and columns
+// receive the same permutation and no matching-based scaling is applied.
+UnsymmetricOrdering computeAmdOnlyOrdering(
+    int n,
+    const std::vector<int>& col_ptr,
+    const std::vector<int>& row_indices);
 
 // Source-compatible aliases retained for callers of the earlier interface.
 // These now execute matching followed by AMD; COLAMD is no longer used.

@@ -65,6 +65,9 @@ bool parseCommandLine(
             options.rebuild_symbolic_cache = true;
         } else if (option == "--no-symbolic-cache") {
             options.no_symbolic_cache = true;
+        } else if (option == "--disable-matching") {
+            // Parsed by main and used only by the unsymmetric pipeline.
+            continue;
         } else {
             std::cerr << "Unknown option: " << option << '\n';
             return false;
