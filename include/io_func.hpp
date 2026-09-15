@@ -10,10 +10,10 @@ void readCSCMatrix(const std::string& filename,
                    int& nnz,
                    std::vector<int>& row_indices,
                    std::vector<int>& col_ptr,
-                   std::vector<float>& values);
+                   std::vector<double>& values);
 
 /**
- * @brief 读取二进制CSC文件并转换为求解器使用的int/float CSC。
+ * @brief 读取二进制CSC文件并转换为求解器使用的int/double CSC。
  *
  * 文件依次存储int8稀疏标志、int32列数、int32行数、8字节nnz、
  * int64列指针、int32行号和double数值。8字节nnz兼容int64以及保存整数的
@@ -24,13 +24,13 @@ void readBinaryCSCMatrix(const std::string& filename,
                          int& nnz,
                          std::vector<int>& row_indices,
                          std::vector<int>& col_ptr,
-                         std::vector<float>& values);
+                         std::vector<double>& values);
 
 /** @brief 将0-based CSC矩阵写成与A_1215.dat兼容的1-based文本文件 */
 void writeCSCMatrix(const std::string& filename,
                     int n,
                     const std::vector<int>& row_indices,
                     const std::vector<int>& col_ptr,
-                    const std::vector<float>& values);
+                    const std::vector<double>& values);
 
 #endif

@@ -22,7 +22,7 @@ struct InputMatrix {
     int declared_nonzeros = 0;
     std::vector<int> row_indices;
     std::vector<int> col_ptr;
-    std::vector<float> values;
+    std::vector<double> values;
 };
 
 bool requestedOrderedExport(int argc, char** argv)
@@ -57,12 +57,12 @@ void printSymbolicReport(
     const UnsymmetricOrdering& ordering,
     const UnsymmetricPermutedCsc& ordered,
     const UnsymmetricSymbolicResult& symbolic,
-    float ordering_ms,
-    float permutation_ms,
-    float symbolic_ms,
+    double ordering_ms,
+    double permutation_ms,
+    double symbolic_ms,
     bool matching_enabled)
 {
-    std::cout << "\n=== General/unsymmetric sparse LU ===\n";
+    std::cout << "\n=== Double-precision general/unsymmetric sparse LU ===\n";
     std::cout << "Matrix = " << input.n << 'x' << input.n
               << ", nonzero = " << ordered.values.size() << '\n';
     if (matching_enabled) {
@@ -109,6 +109,16 @@ void printFactorReport(
     std::cout << "Unsymmetric tree waves = " << statistics.tree_waves << '\n';
     std::cout << "Concurrent CUDA fronts = "
               << statistics.concurrent_fronts << '\n';
+    std::cout << "Maximum LU front batch nodes = "
+              << statistics.maximum_batch_nodes << '\n';
+    std::cout << "Maximum LU front batch storage (MiB) = "
+              << static_cast<double>(statistics.maximum_batch_bytes) /
+                     (1024.0 * 1024.0) << '\n';
+    std::cout << "Compact LU input bucket storage (MiB) = "
+              << static_cast<double>(statistics.compact_input_bucket_bytes) /
+                     (1024.0 * 1024.0) << '\n';
+    std::cout << "Released LU contribution entries = "
+              << statistics.released_contribution_entries << '\n';
     std::cout << "Unsymmetric front assembly time (ms) = "
               << statistics.front_assembly_milliseconds << '\n';
     std::cout << "Batched small/medium LU wall time (ms) = "
@@ -122,10 +132,10 @@ void printFactorReport(
 
 bool printVerification(
     const ResidualVerification& result,
-    float solve_ms,
+    double solve_ms,
     const UnsymmetricRefinementResult& refinement)
 {
-    const float tolerance = std::sqrt(std::numeric_limits<float>::epsilon());
+    const double tolerance = std::sqrt(std::numeric_limits<double>::epsilon());
     const bool passed = std::isfinite(result.scaled_backward_error) &&
         result.scaled_backward_error <= tolerance;
     std::cout << std::scientific << std::setprecision(8);
@@ -141,6 +151,7 @@ bool printVerification(
               << result.scaled_backward_error << '\n';
     std::cout << "Relative solution error = "
               << result.relative_solution_error << '\n';
+    std::cout << "FP64 verification tolerance = " << tolerance << '\n';
     std::cout << "Unsymmetric residual verification = "
               << (passed ? "PASS" : "WARNING") << '\n';
     return passed;
@@ -163,14 +174,14 @@ int runUnsymmetricGpuApplication(
                 input.n, input.col_ptr, input.row_indices, input.values)
             : computeAmdOnlyOrdering(
                 input.n, input.col_ptr, input.row_indices);
-        const float ordering_ms = std::chrono::duration<float, std::milli>(
+        const double ordering_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - ordering_begin).count();
 
         const std::chrono::steady_clock::time_point permutation_begin =
             std::chrono::steady_clock::now();
         const UnsymmetricPermutedCsc ordered = applyUnsymmetricPermutationCsc(
             input.n, input.col_ptr, input.row_indices, input.values, ordering);
-        const float permutation_ms = std::chrono::duration<float, std::milli>(
+        const double permutation_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - permutation_begin).count();
         if (requestedOrderedExport(argc, argv)) {
             writeCSCMatrix(
@@ -182,7 +193,7 @@ int runUnsymmetricGpuApplication(
             std::chrono::steady_clock::now();
         const UnsymmetricSymbolicResult symbolic = analyzeUnsymmetricSupernodes(
             input.n, ordered.col_ptr, ordered.row_indices);
-        const float symbolic_ms = std::chrono::duration<float, std::milli>(
+        const double symbolic_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - symbolic_begin).count();
         printSymbolicReport(
             input, ordering, ordered, symbolic,
@@ -199,9 +210,9 @@ int runUnsymmetricGpuApplication(
             return 4;
         }
 
-        const std::vector<float> expected(
-            static_cast<std::size_t>(input.n), 1.0f);
-        const std::vector<float> rhs = generalMatrixVectorProduct(
+        const std::vector<double> expected(
+            static_cast<std::size_t>(input.n), 1.0);
+        const std::vector<double> rhs = generalMatrixVectorProduct(
             input.n, input.col_ptr, input.row_indices,
             input.values, expected, 0);
         const std::chrono::steady_clock::time_point solve_begin =
@@ -210,7 +221,7 @@ int runUnsymmetricGpuApplication(
             solveGeneralWithIterativeRefinement(
                 input.n, input.col_ptr, input.row_indices,
                 input.values, rhs, ordering, factor);
-        const float solve_ms = std::chrono::duration<float, std::milli>(
+        const double solve_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - solve_begin).count();
         const ResidualVerification verification = verifyGeneralSolution(
             input.n, input.col_ptr, input.row_indices, input.values,

@@ -15,8 +15,8 @@ struct UnsymmetricOrdering {
     std::vector<int> row_iperm;
 
     // Diagonal equilibration for Dr * P * A * Q * Dc.
-    std::vector<float> row_scale;
-    std::vector<float> col_scale;
+    std::vector<double> row_scale;
+    std::vector<double> col_scale;
 
     // Negative when structural matching was disabled and rank was not tested.
     int structural_rank = 0;
@@ -25,7 +25,7 @@ struct UnsymmetricOrdering {
 struct UnsymmetricPermutedCsc {
     std::vector<int> col_ptr;
     std::vector<int> row_indices;
-    std::vector<float> values;
+    std::vector<double> values;
 };
 
 // Compute Duff--Koster weighted matching and scaling first, then apply AMD to
@@ -39,7 +39,7 @@ UnsymmetricOrdering computeMatchingAmdOrdering(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values);
+    const std::vector<double>& values);
 
 // Apply AMD directly to the original structural envelope. Rows and columns
 // receive the same permutation and no matching-based scaling is applied.
@@ -59,14 +59,14 @@ UnsymmetricOrdering computeColamdOrdering(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values);
+    const std::vector<double>& values);
 
 // Form A(row_perm, perm) in the common reordered row/column coordinate system.
 UnsymmetricPermutedCsc applyUnsymmetricPermutationCsc(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
+    const std::vector<double>& values,
     const UnsymmetricOrdering& ordering);
 
 #endif

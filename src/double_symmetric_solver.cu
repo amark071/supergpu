@@ -339,6 +339,27 @@ __device__ double absf(double value)
     return value < 0.0 ? -value : value;
 }
 
+__device__ double atomicAddFp64(double* address, double value)
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 600
+    return atomicAdd(address, value);
+#else
+    unsigned long long int* address_as_ull =
+        reinterpret_cast<unsigned long long int*>(address);
+    unsigned long long int old = *address_as_ull;
+    unsigned long long int assumed = 0;
+    do {
+        assumed = old;
+        old = atomicCAS(
+            address_as_ull,
+            assumed,
+            __double_as_longlong(
+                value + __longlong_as_double(assumed)));
+    } while (assumed != old);
+    return __longlong_as_double(old);
+#endif
+}
+
 __device__ double lowerValue(const double* matrix, int ld, int row, int col)
 {
     const int r = row >= col ? row : col;
@@ -388,9 +409,9 @@ __global__ void scatterBaseEntriesKernel(
         return;
     }
     const double value = values[entry];
-    atomicAdd(front + local_row + local_col * ld, value);
+    atomicAddFp64(front + local_row + local_col * ld, value);
     if (local_row != local_col) {
-        atomicAdd(front + local_col + local_row * ld, value);
+        atomicAddFp64(front + local_col + local_row * ld, value);
     }
 }
 
@@ -418,9 +439,9 @@ __global__ void extendAddKernel(
         return;
     }
     const double value = child[row + col * child_order];
-    atomicAdd(parent + parent_row + parent_col * parent_ld, value);
+    atomicAddFp64(parent + parent_row + parent_col * parent_ld, value);
     if (parent_row != parent_col) {
-        atomicAdd(parent + parent_col + parent_row * parent_ld, value);
+        atomicAddFp64(parent + parent_col + parent_row * parent_ld, value);
     }
 }
 
@@ -1160,7 +1181,7 @@ __global__ void forwardSolveWaveKernel(
                     row + (step + 1) * descriptor.order] * second;
             }
             // Fronts in one elimination-tree wave can update the same ancestor.
-            atomicAdd(rhs + descriptor.ids[row], -value);
+            atomicAddFp64(rhs + descriptor.ids[row], -value);
         }
         __syncthreads();
         step += block_size;

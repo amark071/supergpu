@@ -13,8 +13,8 @@ struct UnsymmetricMatching {
     std::vector<int> column_to_row;
 
     // Duff--Koster diagonal scaling for Dr * A * Dc.
-    std::vector<float> row_scale;
-    std::vector<float> column_scale;
+    std::vector<double> row_scale;
+    std::vector<double> column_scale;
 };
 
 // Compute a maximum-cardinality matching that maximizes the product of the
@@ -24,6 +24,6 @@ UnsymmetricMatching computeDuffKosterMatching(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values);
+    const std::vector<double>& values);
 
 #endif

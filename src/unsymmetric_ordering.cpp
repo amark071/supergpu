@@ -15,7 +15,7 @@ void validateCsc(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>* values)
+    const std::vector<double>* values)
 {
     if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1) ||
         col_ptr.empty() || col_ptr.front() != 0 ||
@@ -134,8 +134,8 @@ UnsymmetricOrdering composeOrdering(
     result.iperm.resize(static_cast<std::size_t>(n));
     result.row_perm.resize(static_cast<std::size_t>(n));
     result.row_iperm.resize(static_cast<std::size_t>(n));
-    result.row_scale.resize(static_cast<std::size_t>(n), 1.0f);
-    result.col_scale.resize(static_cast<std::size_t>(n), 1.0f);
+    result.row_scale.resize(static_cast<std::size_t>(n), 1.0);
+    result.col_scale.resize(static_cast<std::size_t>(n), 1.0);
     for (int new_coordinate = 0; new_coordinate < n; ++new_coordinate) {
         const int matched_coordinate =
             amd.perm[static_cast<std::size_t>(new_coordinate)];
@@ -160,7 +160,7 @@ UnsymmetricOrdering computeMatchingAmdOrdering(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values)
+    const std::vector<double>& values)
 {
     validateCsc(n, col_ptr, row_indices, &values);
     const UnsymmetricMatching matching = computeDuffKosterMatching(
@@ -196,8 +196,8 @@ UnsymmetricOrdering computeAmdOnlyOrdering(
     result.iperm = amd.iperm;
     result.row_perm = amd.perm;
     result.row_iperm = amd.iperm;
-    result.row_scale.assign(static_cast<std::size_t>(n), 1.0f);
-    result.col_scale.assign(static_cast<std::size_t>(n), 1.0f);
+    result.row_scale.assign(static_cast<std::size_t>(n), 1.0);
+    result.col_scale.assign(static_cast<std::size_t>(n), 1.0);
     result.structural_rank = -1;
     validatePermutation(n, result);
     return result;
@@ -210,14 +210,14 @@ UnsymmetricOrdering computeMatchingAmdOrdering(
 {
     return computeMatchingAmdOrdering(
         n, col_ptr, row_indices,
-        std::vector<float>(row_indices.size(), 1.0f));
+        std::vector<double>(row_indices.size(), 1.0));
 }
 
 UnsymmetricOrdering computeColamdOrdering(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values)
+    const std::vector<double>& values)
 {
     return computeMatchingAmdOrdering(n, col_ptr, row_indices, values);
 }
@@ -234,7 +234,7 @@ UnsymmetricPermutedCsc applyUnsymmetricPermutationCsc(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
+    const std::vector<double>& values,
     const UnsymmetricOrdering& ordering)
 {
     validateCsc(n, col_ptr, row_indices, &values);
@@ -257,7 +257,7 @@ UnsymmetricPermutedCsc applyUnsymmetricPermutationCsc(
                 static_cast<double>(values[static_cast<std::size_t>(p)]) *
                 ordering.row_scale[static_cast<std::size_t>(new_row)] *
                 ordering.col_scale[static_cast<std::size_t>(new_col)];
-            result.values.push_back(static_cast<float>(scaled));
+            result.values.push_back(static_cast<double>(scaled));
         }
         result.col_ptr[static_cast<std::size_t>(new_col + 1)] =
             static_cast<int>(result.row_indices.size());

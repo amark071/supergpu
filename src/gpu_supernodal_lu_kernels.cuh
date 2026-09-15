@@ -7,7 +7,7 @@
 
 namespace unsymmetric_lu_kernels {
 
-using Scalar = float;
+using Scalar = double;
 
 struct SmallFrontDescriptor {
     Scalar* matrix;

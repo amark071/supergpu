@@ -23,7 +23,7 @@ void validateCsc(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values)
+    const std::vector<double>& values)
 {
     if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1) ||
         col_ptr.empty() || col_ptr.front() != 0 ||
@@ -51,7 +51,7 @@ public:
         int n,
         const std::vector<int>& col_ptr,
         const std::vector<int>& row_indices,
-        const std::vector<float>& values)
+        const std::vector<double>& values)
         : n_(n),
           col_ptr_(col_ptr),
           row_indices_(row_indices),
@@ -399,7 +399,7 @@ private:
     {
         for (int p = col_ptr_[static_cast<std::size_t>(col)];
              p < col_ptr_[static_cast<std::size_t>(col + 1)]; ++p) {
-            if (values_[static_cast<std::size_t>(p)] == 0.0f) {
+            if (values_[static_cast<std::size_t>(p)] == 0.0) {
                 continue;
             }
             const int row = row_indices_[static_cast<std::size_t>(p)];
@@ -442,8 +442,8 @@ private:
         UnsymmetricMatching result;
         result.row_to_column = row_match_;
         result.column_to_row = column_match_;
-        result.row_scale.resize(static_cast<std::size_t>(n_), 1.0f);
-        result.column_scale.resize(static_cast<std::size_t>(n_), 1.0f);
+        result.row_scale.resize(static_cast<std::size_t>(n_), 1.0);
+        result.column_scale.resize(static_cast<std::size_t>(n_), 1.0);
         for (int col = 0; col < n_; ++col) {
             if (column_match_[static_cast<std::size_t>(col)] >= 0) {
                 ++result.cardinality;
@@ -465,20 +465,20 @@ private:
         return result;
     }
 
-    static float safeExp(double exponent)
+    static double safeExp(double exponent)
     {
         const double maximum = std::log(
-            static_cast<double>(std::numeric_limits<float>::max()));
+            static_cast<double>(std::numeric_limits<double>::max()));
         const double minimum = std::log(
-            static_cast<double>(std::numeric_limits<float>::min()));
-        return static_cast<float>(std::exp(
+            static_cast<double>(std::numeric_limits<double>::min()));
+        return static_cast<double>(std::exp(
             std::max(minimum, std::min(maximum, exponent))));
     }
 
     int n_;
     const std::vector<int>& col_ptr_;
     const std::vector<int>& row_indices_;
-    const std::vector<float>& values_;
+    const std::vector<double>& values_;
     std::vector<double> cost_;
     std::vector<double> column_max_log_;
     std::vector<double> row_dual_;
@@ -503,7 +503,7 @@ UnsymmetricMatching computeDuffKosterMatching(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values)
+    const std::vector<double>& values)
 {
     validateCsc(n, col_ptr, row_indices, values);
     return DuffKosterMatcher(n, col_ptr, row_indices, values).run();

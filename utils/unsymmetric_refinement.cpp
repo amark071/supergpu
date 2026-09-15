@@ -10,11 +10,11 @@
 
 namespace {
 
-std::vector<float> permuteRightHandSide(
-    const std::vector<float>& rhs,
+std::vector<double> permuteRightHandSide(
+    const std::vector<double>& rhs,
     const UnsymmetricOrdering& ordering)
 {
-    std::vector<float> result(rhs.size(), 0.0f);
+    std::vector<double> result(rhs.size(), 0.0);
     for (std::size_t new_row = 0; new_row < result.size(); ++new_row) {
         result[new_row] = rhs[static_cast<std::size_t>(
             ordering.row_perm[new_row])] * ordering.row_scale[new_row];
@@ -22,11 +22,11 @@ std::vector<float> permuteRightHandSide(
     return result;
 }
 
-std::vector<float> restoreColumnOrder(
-    const std::vector<float>& ordered_solution,
+std::vector<double> restoreColumnOrder(
+    const std::vector<double>& ordered_solution,
     const UnsymmetricOrdering& ordering)
 {
-    std::vector<float> result(ordered_solution.size(), 0.0f);
+    std::vector<double> result(ordered_solution.size(), 0.0);
     for (std::size_t new_col = 0; new_col < result.size(); ++new_col) {
         result[static_cast<std::size_t>(ordering.perm[new_col])] =
             ordering.col_scale[new_col] * ordered_solution[new_col];
@@ -34,9 +34,9 @@ std::vector<float> restoreColumnOrder(
     return result;
 }
 
-float infinityNorm(const std::vector<float>& values)
+double infinityNorm(const std::vector<double>& values)
 {
-    float result = 0.0f;
+    double result = 0.0;
     for (std::size_t i = 0; i < values.size(); ++i) {
         result = std::max(result, std::fabs(values[i]));
     }
@@ -44,8 +44,8 @@ float infinityNorm(const std::vector<float>& values)
 }
 
 void applyCorrection(
-    const std::vector<float>& correction,
-    std::vector<float>& solution)
+    const std::vector<double>& correction,
+    std::vector<double>& solution)
 {
     for (std::size_t i = 0; i < solution.size(); ++i) {
         solution[i] += correction[i];
@@ -58,8 +58,8 @@ UnsymmetricRefinementResult solveGeneralWithIterativeRefinement(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& rhs,
+    const std::vector<double>& values,
+    const std::vector<double>& rhs,
     const UnsymmetricOrdering& ordering,
     const GpuSupernodalLuFactor& factor,
     int maximum_corrections)
@@ -70,12 +70,12 @@ UnsymmetricRefinementResult solveGeneralWithIterativeRefinement(
     UnsymmetricRefinementResult result;
     result.solution = restoreColumnOrder(
         factor.solve(permuteRightHandSide(rhs, ordering)), ordering);
-    std::vector<float> best_solution = result.solution;
-    float best_residual = std::numeric_limits<float>::infinity();
+    std::vector<double> best_solution = result.solution;
+    double best_residual = std::numeric_limits<double>::infinity();
     for (int iteration = 0; iteration <= maximum_corrections; ++iteration) {
-        const std::vector<float> residual = generalResidual(
+        const std::vector<double> residual = generalResidual(
             n, col_ptr, row_indices, values, rhs, result.solution);
-        const float residual_norm = infinityNorm(residual);
+        const double residual_norm = infinityNorm(residual);
         if (iteration == 0) {
             result.initial_residual_norm = residual_norm;
         }
@@ -88,7 +88,7 @@ UnsymmetricRefinementResult solveGeneralWithIterativeRefinement(
         if (iteration == maximum_corrections) {
             break;
         }
-        const std::vector<float> ordered_correction = factor.solve(
+        const std::vector<double> ordered_correction = factor.solve(
             permuteRightHandSide(residual, ordering));
         applyCorrection(
             restoreColumnOrder(ordered_correction, ordering), result.solution);

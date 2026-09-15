@@ -13,11 +13,13 @@ struct GpuLuOptions {
 
     int batched_width_limit;
     std::size_t batched_update_limit;
+    std::size_t max_batch_nodes;
+    std::size_t max_batch_bytes;
     int panel_size;
     int concurrent_fronts;
-    float threshold_pivoting;
-    float absolute_pivot_tolerance;
-    float relative_pivot_tolerance;
+    double threshold_pivoting;
+    double absolute_pivot_tolerance;
+    double relative_pivot_tolerance;
 };
 
 struct GpuLuStatistics {
@@ -31,11 +33,15 @@ struct GpuLuStatistics {
     std::size_t unresolved_root_columns;
     std::size_t tree_waves;
     std::size_t concurrent_fronts;
+    std::size_t maximum_batch_nodes;
+    std::size_t maximum_batch_bytes;
+    std::size_t compact_input_bucket_bytes;
+    std::size_t released_contribution_entries;
 
-    float front_assembly_milliseconds;
-    float small_medium_factorization_milliseconds;
-    float large_front_factorization_milliseconds;
-    float factorization_milliseconds;
+    double front_assembly_milliseconds;
+    double small_medium_factorization_milliseconds;
+    double large_front_factorization_milliseconds;
+    double factorization_milliseconds;
 };
 
 // General sparse PAQ=LU multifrontal factorization. The matrix must already
@@ -55,12 +61,12 @@ public:
         int n,
         const std::vector<int>& col_ptr,
         const std::vector<int>& row_indices,
-        const std::vector<float>& values,
+        const std::vector<double>& values,
         const UnsymmetricSymbolicResult& symbolic);
 
     // rhs is in reordered row coordinates; the result is in reordered column
     // coordinates. The application layer applies the external permutations.
-    std::vector<float> solve(const std::vector<float>& reordered_rhs) const;
+    std::vector<double> solve(const std::vector<double>& reordered_rhs) const;
 
     bool complete() const;
     const GpuLuStatistics& statistics() const;

@@ -7,18 +7,18 @@
 #include <vector>
 
 struct UnsymmetricRefinementResult {
-    std::vector<float> solution;
+    std::vector<double> solution;
     int correction_steps = 0;
-    float initial_residual_norm = 0.0f;
-    float final_residual_norm = 0.0f;
+    double initial_residual_norm = 0.0;
+    double final_residual_norm = 0.0;
 };
 
 UnsymmetricRefinementResult solveGeneralWithIterativeRefinement(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& rhs,
+    const std::vector<double>& values,
+    const std::vector<double>& rhs,
     const UnsymmetricOrdering& ordering,
     const GpuSupernodalLuFactor& factor,
     int maximum_corrections = 2);

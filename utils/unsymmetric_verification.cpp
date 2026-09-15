@@ -8,46 +8,46 @@
 
 namespace {
 
-float infinityNorm(const std::vector<float>& values)
+double infinityNorm(const std::vector<double>& values)
 {
-    float result = 0.0f;
+    double result = 0.0;
     for (std::size_t i = 0; i < values.size(); ++i) {
         result = std::max(result, std::fabs(values[i]));
     }
     return result;
 }
 
-float safeRatio(float numerator, float denominator)
+double safeRatio(double numerator, double denominator)
 {
-    if (denominator > 0.0f) {
+    if (denominator > 0.0) {
         return numerator / denominator;
     }
-    return numerator == 0.0f
-        ? 0.0f : std::numeric_limits<float>::infinity();
+    return numerator == 0.0
+        ? 0.0 : std::numeric_limits<double>::infinity();
 }
 
 } // namespace
 
-std::vector<float> generalMatrixVectorProduct(
+std::vector<double> generalMatrixVectorProduct(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& x,
-    float* matrix_infinity_norm)
+    const std::vector<double>& values,
+    const std::vector<double>& x,
+    double* matrix_infinity_norm)
 {
     if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1) ||
         row_indices.size() != values.size() ||
         x.size() != static_cast<std::size_t>(n)) {
         throw std::invalid_argument("invalid general CSC matrix-vector product");
     }
-    std::vector<float> result(static_cast<std::size_t>(n), 0.0f);
-    std::vector<float> row_sums(static_cast<std::size_t>(n), 0.0f);
+    std::vector<double> result(static_cast<std::size_t>(n), 0.0);
+    std::vector<double> row_sums(static_cast<std::size_t>(n), 0.0);
     for (int col = 0; col < n; ++col) {
         for (int p = col_ptr[static_cast<std::size_t>(col)];
              p < col_ptr[static_cast<std::size_t>(col + 1)]; ++p) {
             const int row = row_indices[static_cast<std::size_t>(p)];
-            const float value = values[static_cast<std::size_t>(p)];
+            const double value = values[static_cast<std::size_t>(p)];
             result[static_cast<std::size_t>(row)] +=
                 value * x[static_cast<std::size_t>(col)];
             row_sums[static_cast<std::size_t>(row)] += std::fabs(value);
@@ -55,18 +55,18 @@ std::vector<float> generalMatrixVectorProduct(
     }
     if (matrix_infinity_norm != 0) {
         *matrix_infinity_norm = row_sums.empty()
-            ? 0.0f : *std::max_element(row_sums.begin(), row_sums.end());
+            ? 0.0 : *std::max_element(row_sums.begin(), row_sums.end());
     }
     return result;
 }
 
-std::vector<float> generalResidual(
+std::vector<double> generalResidual(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& rhs,
-    const std::vector<float>& solution)
+    const std::vector<double>& values,
+    const std::vector<double>& rhs,
+    const std::vector<double>& solution)
 {
     if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1) ||
         row_indices.size() != values.size() ||
@@ -81,31 +81,26 @@ std::vector<float> generalResidual(
              p < col_ptr[static_cast<std::size_t>(col + 1)]; ++p) {
             const int row = row_indices[static_cast<std::size_t>(p)];
             residual[static_cast<std::size_t>(row)] -=
-                static_cast<double>(values[static_cast<std::size_t>(p)]) * x;
+                values[static_cast<std::size_t>(p)] * x;
         }
     }
-    std::vector<float> result(static_cast<std::size_t>(n));
-    for (int row = 0; row < n; ++row) {
-        result[static_cast<std::size_t>(row)] =
-            static_cast<float>(residual[static_cast<std::size_t>(row)]);
-    }
-    return result;
+    return residual;
 }
 
 ResidualVerification verifyGeneralSolution(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& rhs,
-    const std::vector<float>& solution,
-    const std::vector<float>& expected_solution)
+    const std::vector<double>& values,
+    const std::vector<double>& rhs,
+    const std::vector<double>& solution,
+    const std::vector<double>& expected_solution)
 {
-    float matrix_norm = 0.0f;
-    const std::vector<float> product = generalMatrixVectorProduct(
+    double matrix_norm = 0.0;
+    const std::vector<double> product = generalMatrixVectorProduct(
         n, col_ptr, row_indices, values, solution, &matrix_norm);
-    float residual_norm = 0.0f;
-    float solution_error = 0.0f;
+    double residual_norm = 0.0;
+    double solution_error = 0.0;
     for (int i = 0; i < n; ++i) {
         residual_norm = std::max(
             residual_norm,

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <future>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -68,12 +69,6 @@ private:
     std::size_t size_;
 };
 
-struct MatrixEntry {
-    int row;
-    int col;
-    float value;
-};
-
 struct FrontData {
     int node = -1;
     int candidate_count = 0;
@@ -88,20 +83,27 @@ struct FactorData {
     int delayed = 0;
     std::vector<int> row_ids;
     std::vector<int> col_ids;
+    // Full frontal matrix is retained only until its Schur contribution has
+    // been assembled into the parent. The solve data then lives in the two
+    // compact arrays below.
     std::vector<LuScalar> matrix;
+    std::vector<LuScalar> factor_columns;
+    std::vector<LuScalar> upper_trailing;
+    bool compacted = false;
 };
 
 struct GpuFrontResult {
+    int node = -1;
     FactorData factor;
     bool large = false;
-    float milliseconds = 0.0f;
+    double milliseconds = 0.0;
 };
 
 void validateCsc(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values)
+    const std::vector<double>& values)
 {
     if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1) ||
         col_ptr.empty() || col_ptr.front() != 0 ||
@@ -206,7 +208,7 @@ void copyFromDeviceAsync(
 }
 
 void factorSmallFrontBatch(
-    const std::vector<FrontData>& fronts,
+    std::vector<FrontData>& fronts,
     const std::vector<int>& front_indices,
     const GpuLuOptions& options,
     std::vector<GpuFrontResult>& results)
@@ -218,6 +220,11 @@ void factorSmallFrontBatch(
     std::vector<std::size_t> matrix_offsets(front_indices.size(), 0);
     std::vector<std::size_t> row_offsets(front_indices.size(), 0);
     std::vector<std::size_t> col_offsets(front_indices.size(), 0);
+    std::vector<std::size_t> matrix_sizes(front_indices.size(), 0);
+    std::vector<std::size_t> row_sizes(front_indices.size(), 0);
+    std::vector<std::size_t> col_sizes(front_indices.size(), 0);
+    std::vector<int> candidate_counts(front_indices.size(), 0);
+    std::vector<LuScalar> scales(front_indices.size(), 0.0);
     std::size_t matrix_count = 0;
     std::size_t row_count = 0;
     std::size_t col_count = 0;
@@ -226,40 +233,50 @@ void factorSmallFrontBatch(
         matrix_offsets[i] = matrix_count;
         row_offsets[i] = row_count;
         col_offsets[i] = col_count;
-        matrix_count += front.matrix.size();
-        row_count += front.row_ids.size();
-        col_count += front.col_ids.size();
+        matrix_sizes[i] = front.matrix.size();
+        row_sizes[i] = front.row_ids.size();
+        col_sizes[i] = front.col_ids.size();
+        candidate_counts[i] = front.candidate_count;
+        scales[i] = frontScale(front);
+        matrix_count += matrix_sizes[i];
+        row_count += row_sizes[i];
+        col_count += col_sizes[i];
     }
 
     std::vector<LuScalar> host_matrix(matrix_count);
     std::vector<int> host_rows(row_count);
     std::vector<int> host_cols(col_count);
-    DeviceArray<LuScalar> device_matrix(matrix_count);
-    DeviceArray<int> device_rows(row_count);
-    DeviceArray<int> device_cols(col_count);
-    DeviceArray<Descriptor> device_descriptors(front_indices.size());
-    std::vector<Descriptor> descriptors(front_indices.size());
-
     for (std::size_t i = 0; i < front_indices.size(); ++i) {
-        const FrontData& front = fronts[static_cast<std::size_t>(front_indices[i])];
+        FrontData& front = fronts[static_cast<std::size_t>(front_indices[i])];
         std::copy(front.matrix.begin(), front.matrix.end(),
                   host_matrix.begin() + matrix_offsets[i]);
         std::copy(front.row_ids.begin(), front.row_ids.end(),
                   host_rows.begin() + row_offsets[i]);
         std::copy(front.col_ids.begin(), front.col_ids.end(),
                   host_cols.begin() + col_offsets[i]);
+        std::vector<LuScalar>().swap(front.matrix);
+        std::vector<int>().swap(front.row_ids);
+        std::vector<int>().swap(front.col_ids);
+    }
+
+    DeviceArray<LuScalar> device_matrix(matrix_count);
+    DeviceArray<int> device_rows(row_count);
+    DeviceArray<int> device_cols(col_count);
+    DeviceArray<Descriptor> device_descriptors(front_indices.size());
+    std::vector<Descriptor> descriptors(front_indices.size());
+    for (std::size_t i = 0; i < front_indices.size(); ++i) {
         Descriptor descriptor;
         descriptor.matrix = device_matrix.get() + matrix_offsets[i];
         descriptor.row_ids = device_rows.get() + row_offsets[i];
         descriptor.col_ids = device_cols.get() + col_offsets[i];
-        descriptor.row_count = static_cast<int>(front.row_ids.size());
-        descriptor.col_count = static_cast<int>(front.col_ids.size());
-        descriptor.candidate_count = front.candidate_count;
+        descriptor.row_count = static_cast<int>(row_sizes[i]);
+        descriptor.col_count = static_cast<int>(col_sizes[i]);
+        descriptor.candidate_count = candidate_counts[i];
         descriptor.threshold = options.threshold_pivoting;
         descriptor.zero_tolerance = std::max(
             static_cast<LuScalar>(options.absolute_pivot_tolerance),
             static_cast<LuScalar>(options.relative_pivot_tolerance) *
-                frontScale(front));
+                scales[i]);
         descriptor.accepted = 0;
         descriptor.delayed = 0;
         descriptors[i] = descriptor;
@@ -305,21 +322,21 @@ void factorSmallFrontBatch(
 
     for (std::size_t i = 0; i < front_indices.size(); ++i) {
         const int index = front_indices[i];
-        const FrontData& front = fronts[static_cast<std::size_t>(index)];
         GpuFrontResult& result = results[static_cast<std::size_t>(index)];
+        result.node = fronts[static_cast<std::size_t>(index)].node;
         result.large = false;
-        result.factor.candidate_count = front.candidate_count;
+        result.factor.candidate_count = candidate_counts[i];
         result.factor.accepted = descriptors[i].accepted;
         result.factor.delayed = descriptors[i].delayed;
         result.factor.matrix.assign(
             host_matrix.begin() + matrix_offsets[i],
-            host_matrix.begin() + matrix_offsets[i] + front.matrix.size());
+            host_matrix.begin() + matrix_offsets[i] + matrix_sizes[i]);
         result.factor.row_ids.assign(
             host_rows.begin() + row_offsets[i],
-            host_rows.begin() + row_offsets[i] + front.row_ids.size());
+            host_rows.begin() + row_offsets[i] + row_sizes[i]);
         result.factor.col_ids.assign(
             host_cols.begin() + col_offsets[i],
-            host_cols.begin() + col_offsets[i] + front.col_ids.size());
+            host_cols.begin() + col_offsets[i] + col_sizes[i]);
     }
 }
 
@@ -338,7 +355,7 @@ void flushLargePanel(
         return;
     }
     const LuScalar one = 1.0;
-    checkCublas(cublasStrsm(
+    checkCublas(cublasDtrsm(
         cublas, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER,
         CUBLAS_OP_N, CUBLAS_DIAG_UNIT, width, right_cols, &one,
         matrix.get() + panel_begin + panel_begin * row_count, row_count,
@@ -350,7 +367,7 @@ void flushLargePanel(
         return;
     }
     const LuScalar minus_one = -1.0;
-    checkCublas(cublasSgemm(
+    checkCublas(cublasDgemm(
         cublas, CUBLAS_OP_N, CUBLAS_OP_N,
         trailing_rows, right_cols, width, &minus_one,
         matrix.get() + accepted_end + panel_begin * row_count, row_count,
@@ -446,6 +463,7 @@ GpuFrontResult factorLargeFrontOnGpu(
             device_matrix, device_rows, device_cols, front, stream);
 
         GpuFrontResult result;
+        result.node = front.node;
         result.large = true;
         result.factor.candidate_count = front.candidate_count;
         const LuScalar zero_tolerance = std::max(
@@ -462,7 +480,7 @@ GpuFrontResult factorLargeFrontOnGpu(
         copyFromDeviceAsync(
             result.factor, device_matrix, device_rows, device_cols, stream);
         checkCuda(cudaStreamSynchronize(stream), "download factored LU front");
-        result.milliseconds = std::chrono::duration<float, std::milli>(
+        result.milliseconds = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - begin).count();
         checkCuda(cudaStreamDestroy(stream), "destroy LU front stream");
         return result;
@@ -477,11 +495,14 @@ GpuFrontResult factorLargeFrontOnGpu(
 GpuLuOptions::GpuLuOptions()
     : batched_width_limit(64),
       batched_update_limit(4000000),
+      max_batch_nodes(256),
+      max_batch_bytes(256ULL * 1024ULL * 1024ULL),
       panel_size(32),
       concurrent_fronts(4),
-      threshold_pivoting(0.1f),
-      absolute_pivot_tolerance(1.0e-20f),
-      relative_pivot_tolerance(1.0e-7f)
+      threshold_pivoting(0.1),
+      absolute_pivot_tolerance(0.0),
+      relative_pivot_tolerance(
+          32.0 * std::numeric_limits<double>::epsilon())
 {
 }
 
@@ -489,10 +510,12 @@ GpuLuStatistics::GpuLuStatistics()
     : single_column_nodes(0), small_medium_nodes(0), large_front_nodes(0),
       accepted_pivots(0), delayed_columns(0), unresolved_root_columns(0),
       tree_waves(0), concurrent_fronts(0),
-      front_assembly_milliseconds(0.0f),
-      small_medium_factorization_milliseconds(0.0f),
-      large_front_factorization_milliseconds(0.0f),
-      factorization_milliseconds(0.0f)
+      maximum_batch_nodes(0), maximum_batch_bytes(0),
+      compact_input_bucket_bytes(0), released_contribution_entries(0),
+      front_assembly_milliseconds(0.0),
+      small_medium_factorization_milliseconds(0.0),
+      large_front_factorization_milliseconds(0.0),
+      factorization_milliseconds(0.0)
 {
 }
 
@@ -502,10 +525,12 @@ public:
         : options_(options), n_(0), complete_(false)
     {
         if (options_.batched_width_limit < 1 ||
-            options_.batched_update_limit == 0 || options_.panel_size < 1 ||
+            options_.batched_update_limit == 0 ||
+            options_.max_batch_nodes == 0 || options_.max_batch_bytes == 0 ||
+            options_.panel_size < 1 ||
             options_.concurrent_fronts < 1 ||
-            options_.threshold_pivoting <= 0.0f ||
-            options_.threshold_pivoting > 1.0f) {
+            options_.threshold_pivoting <= 0.0 ||
+            options_.threshold_pivoting > 1.0) {
             throw std::invalid_argument("invalid general GPU LU options");
         }
     }
@@ -514,7 +539,7 @@ public:
         int n,
         const std::vector<int>& col_ptr,
         const std::vector<int>& row_indices,
-        const std::vector<float>& values,
+        const std::vector<double>& values,
         const UnsymmetricSymbolicResult& symbolic)
     {
         validateCsc(n, col_ptr, row_indices, values);
@@ -533,6 +558,7 @@ public:
         for (std::size_t wave = 0; wave < waves.size(); ++wave) {
             processWave(waves[wave], symbolic);
         }
+        releaseInputBuckets();
 
         std::size_t accepted_total = 0;
         for (std::size_t node = 0; node < factors_.size(); ++node) {
@@ -548,12 +574,12 @@ public:
             ? "complete PAQ=LU factorization"
             : "numerically singular: unresolved delayed columns at a root";
         statistics_.factorization_milliseconds =
-            std::chrono::duration<float, std::milli>(
+            std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - factor_begin).count();
         return statistics_;
     }
 
-    std::vector<float> solve(const std::vector<float>& rhs) const
+    std::vector<double> solve(const std::vector<double>& rhs) const
     {
         if (!complete_) {
             throw std::runtime_error("cannot solve with an incomplete general LU");
@@ -578,8 +604,11 @@ private:
         diagnostic_.clear();
         statistics_ = GpuLuStatistics();
         factors_.assign(symbolic.supernode_parent.size(), FactorData());
-        input_buckets_.assign(
-            symbolic.supernode_parent.size(), std::vector<MatrixEntry>());
+        input_rows_ = 0;
+        input_values_ = 0;
+        input_owner_ptr_.clear();
+        input_entry_indices_.clear();
+        input_entry_columns_.clear();
         row_position_.assign(static_cast<std::size_t>(n_), -1);
         col_position_.assign(static_cast<std::size_t>(n_), -1);
         children_.assign(
@@ -596,9 +625,11 @@ private:
     void buildInputBuckets(
         const std::vector<int>& col_ptr,
         const std::vector<int>& row_indices,
-        const std::vector<float>& values,
+        const std::vector<double>& values,
         const UnsymmetricSymbolicResult& symbolic)
     {
+        input_rows_ = &row_indices;
+        input_values_ = &values;
         std::vector<int> column_node(static_cast<std::size_t>(n_), -1);
         for (std::size_t node = 0; node < factors_.size(); ++node) {
             const int begin = symbolic.supernode_ptr[node];
@@ -608,16 +639,46 @@ private:
                     static_cast<int>(node);
             }
         }
+        input_owner_ptr_.assign(factors_.size() + 1, 0);
         for (int col = 0; col < n_; ++col) {
             for (int p = col_ptr[static_cast<std::size_t>(col)];
                  p < col_ptr[static_cast<std::size_t>(col + 1)]; ++p) {
                 const int row = row_indices[static_cast<std::size_t>(p)];
                 const int owner_col = std::min(row, col);
                 const int owner = column_node[static_cast<std::size_t>(owner_col)];
-                input_buckets_[static_cast<std::size_t>(owner)].push_back(
-                    MatrixEntry{row, col, values[static_cast<std::size_t>(p)]});
+                ++input_owner_ptr_[static_cast<std::size_t>(owner + 1)];
             }
         }
+        for (std::size_t node = 0; node < factors_.size(); ++node) {
+            input_owner_ptr_[node + 1] += input_owner_ptr_[node];
+        }
+        input_entry_indices_.resize(row_indices.size());
+        input_entry_columns_.resize(row_indices.size());
+        std::vector<int> next = input_owner_ptr_;
+        for (int col = 0; col < n_; ++col) {
+            for (int p = col_ptr[static_cast<std::size_t>(col)];
+                 p < col_ptr[static_cast<std::size_t>(col + 1)]; ++p) {
+                const int row = row_indices[static_cast<std::size_t>(p)];
+                const int owner_col = std::min(row, col);
+                const int owner = column_node[static_cast<std::size_t>(owner_col)];
+                const int destination = next[static_cast<std::size_t>(owner)]++;
+                input_entry_indices_[static_cast<std::size_t>(destination)] = p;
+                input_entry_columns_[static_cast<std::size_t>(destination)] = col;
+            }
+        }
+        statistics_.compact_input_bucket_bytes =
+            input_owner_ptr_.size() * sizeof(int) +
+            input_entry_indices_.size() * sizeof(int) +
+            input_entry_columns_.size() * sizeof(int);
+    }
+
+    void releaseInputBuckets()
+    {
+        input_rows_ = 0;
+        input_values_ = 0;
+        std::vector<int>().swap(input_owner_ptr_);
+        std::vector<int>().swap(input_entry_indices_);
+        std::vector<int>().swap(input_entry_columns_);
     }
 
     std::vector<std::vector<int> > buildTreeWaves() const
@@ -672,6 +733,35 @@ private:
         ids.push_back(id);
     }
 
+    void compactFactor(FactorData& factor)
+    {
+        if (factor.compacted) {
+            return;
+        }
+        const std::size_t rows = factor.row_ids.size();
+        const std::size_t cols = factor.col_ids.size();
+        const std::size_t accepted = static_cast<std::size_t>(factor.accepted);
+        if (accepted > rows || accepted > cols ||
+            factor.matrix.size() != rows * cols) {
+            throw std::runtime_error("invalid LU front during compaction");
+        }
+
+        factor.factor_columns.assign(
+            factor.matrix.begin(),
+            factor.matrix.begin() + rows * accepted);
+        factor.upper_trailing.resize(accepted * (cols - accepted));
+        for (std::size_t col = accepted; col < cols; ++col) {
+            std::copy(
+                factor.matrix.begin() + col * rows,
+                factor.matrix.begin() + col * rows + accepted,
+                factor.upper_trailing.begin() + (col - accepted) * accepted);
+        }
+        statistics_.released_contribution_entries +=
+            (rows - accepted) * (cols - accepted);
+        std::vector<LuScalar>().swap(factor.matrix);
+        factor.compacted = true;
+    }
+
     FrontData prepareFront(
         int node,
         const UnsymmetricSymbolicResult& symbolic)
@@ -721,7 +811,7 @@ private:
             }
         }
         front.matrix.assign(
-            front.row_ids.size() * front.col_ids.size(), 0.0f);
+            front.row_ids.size() * front.col_ids.size(), 0.0);
         assembleInput(node, row_position_, col_position_, front);
         assembleChildren(node, row_position_, col_position_, front);
         for (std::size_t i = 0; i < front.row_ids.size(); ++i) {
@@ -739,18 +829,27 @@ private:
         const std::vector<int>& col_position,
         FrontData& front) const
     {
+        if (input_rows_ == 0 || input_values_ == 0) {
+            throw std::runtime_error("LU input buckets were released too early");
+        }
         const int leading_dimension = static_cast<int>(front.row_ids.size());
-        const std::vector<MatrixEntry>& entries =
-            input_buckets_[static_cast<std::size_t>(node)];
-        for (std::size_t p = 0; p < entries.size(); ++p) {
-            const int row = row_position[static_cast<std::size_t>(entries[p].row)];
-            const int col = col_position[static_cast<std::size_t>(entries[p].col)];
+        const int begin = input_owner_ptr_[static_cast<std::size_t>(node)];
+        const int end = input_owner_ptr_[static_cast<std::size_t>(node + 1)];
+        for (int q = begin; q < end; ++q) {
+            const int entry = input_entry_indices_[static_cast<std::size_t>(q)];
+            const int original_row =
+                (*input_rows_)[static_cast<std::size_t>(entry)];
+            const int original_col =
+                input_entry_columns_[static_cast<std::size_t>(q)];
+            const int row = row_position[static_cast<std::size_t>(original_row)];
+            const int col = col_position[static_cast<std::size_t>(original_col)];
             if (row < 0 || col < 0) {
                 throw std::runtime_error(
                     "symbolic envelope omitted an original unsymmetric entry");
             }
             front.matrix[static_cast<std::size_t>(
-                row + col * leading_dimension)] += entries[p].value;
+                row + col * leading_dimension)] +=
+                    (*input_values_)[static_cast<std::size_t>(entry)];
         }
     }
 
@@ -758,12 +857,16 @@ private:
         int node,
         const std::vector<int>& row_position,
         const std::vector<int>& col_position,
-        FrontData& front) const
+        FrontData& front)
     {
         const int leading_dimension = static_cast<int>(front.row_ids.size());
         const std::vector<int>& children = children_[static_cast<std::size_t>(node)];
         for (std::size_t c = 0; c < children.size(); ++c) {
-            const FactorData& child = factors_[static_cast<std::size_t>(children[c])];
+            FactorData& child = factors_[static_cast<std::size_t>(children[c])];
+            if (child.compacted) {
+                throw std::runtime_error(
+                    "LU child contribution was released before parent assembly");
+            }
             const int child_rows = static_cast<int>(child.row_ids.size());
             for (std::size_t col = static_cast<std::size_t>(child.accepted);
                  col < child.col_ids.size(); ++col) {
@@ -782,29 +885,40 @@ private:
                         child.matrix[row + col * static_cast<std::size_t>(child_rows)];
                 }
             }
+            compactFactor(child);
         }
     }
 
-    void processWave(
-        const std::vector<int>& nodes,
-        const UnsymmetricSymbolicResult& symbolic)
+    static std::size_t frontStorageBytes(const FrontData& front)
     {
-        std::vector<FrontData> fronts;
+        return front.matrix.size() * sizeof(LuScalar) +
+            (front.row_ids.size() + front.col_ids.size()) * sizeof(int);
+    }
+
+    void storeFactor(
+        int node,
+        FactorData&& factor)
+    {
+        statistics_.accepted_pivots +=
+            static_cast<std::size_t>(factor.accepted);
+        statistics_.delayed_columns +=
+            static_cast<std::size_t>(factor.delayed);
+        factors_[static_cast<std::size_t>(node)] = std::move(factor);
+    }
+
+    void processFrontBatch(std::vector<FrontData>& fronts)
+    {
         std::vector<int> small_indices;
         std::vector<int> large_indices;
-        fronts.reserve(nodes.size());
-        small_indices.reserve(nodes.size());
-        large_indices.reserve(nodes.size());
-        const std::chrono::steady_clock::time_point assembly_begin =
-            std::chrono::steady_clock::now();
-        for (std::size_t i = 0; i < nodes.size(); ++i) {
-            fronts.push_back(prepareFront(nodes[i], symbolic));
-            const int width = fronts.back().candidate_count;
+        small_indices.reserve(fronts.size());
+        large_indices.reserve(fronts.size());
+        for (std::size_t i = 0; i < fronts.size(); ++i) {
+            const int width = fronts[i].candidate_count;
             if (width == 1) {
                 ++statistics_.single_column_nodes;
                 small_indices.push_back(static_cast<int>(i));
             } else if (width <= options_.batched_width_limit &&
-                       estimatedTrailingUpdates(fronts.back()) <=
+                       estimatedTrailingUpdates(fronts[i]) <=
                            options_.batched_update_limit) {
                 ++statistics_.small_medium_nodes;
                 small_indices.push_back(static_cast<int>(i));
@@ -813,9 +927,6 @@ private:
                 large_indices.push_back(static_cast<int>(i));
             }
         }
-        statistics_.front_assembly_milliseconds +=
-            std::chrono::duration<float, std::milli>(
-                std::chrono::steady_clock::now() - assembly_begin).count();
 
         std::vector<GpuFrontResult> small_results(fronts.size());
         const std::chrono::steady_clock::time_point small_begin =
@@ -823,17 +934,14 @@ private:
         factorSmallFrontBatch(
             fronts, small_indices, options_, small_results);
         statistics_.small_medium_factorization_milliseconds +=
-            std::chrono::duration<float, std::milli>(
+            std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - small_begin).count();
         for (std::size_t i = 0; i < small_indices.size(); ++i) {
             const int index = small_indices[i];
             GpuFrontResult& result = small_results[static_cast<std::size_t>(index)];
-            statistics_.accepted_pivots +=
-                static_cast<std::size_t>(result.factor.accepted);
-            statistics_.delayed_columns +=
-                static_cast<std::size_t>(result.factor.delayed);
-            factors_[static_cast<std::size_t>(nodes[static_cast<std::size_t>(index)])] =
-                std::move(result.factor);
+            storeFactor(
+                result.node,
+                std::move(result.factor));
         }
 
         const std::size_t concurrency = static_cast<std::size_t>(
@@ -856,16 +964,51 @@ private:
             for (std::size_t i = first; i < end; ++i) {
                 const int index = large_indices[i];
                 GpuFrontResult result = futures[i - first].get();
-                statistics_.accepted_pivots +=
-                    static_cast<std::size_t>(result.factor.accepted);
-                statistics_.delayed_columns +=
-                    static_cast<std::size_t>(result.factor.delayed);
                 statistics_.large_front_factorization_milliseconds +=
                     result.milliseconds;
-                factors_[static_cast<std::size_t>(
-                    nodes[static_cast<std::size_t>(index)])] =
-                    std::move(result.factor);
+                storeFactor(
+                    result.node,
+                    std::move(result.factor));
             }
+        }
+    }
+
+    void processWave(
+        const std::vector<int>& nodes,
+        const UnsymmetricSymbolicResult& symbolic)
+    {
+        std::vector<FrontData> fronts;
+        fronts.reserve(std::min(
+            nodes.size(), static_cast<std::size_t>(options_.max_batch_nodes)));
+        std::size_t batch_bytes = 0;
+        for (std::size_t i = 0; i < nodes.size(); ++i) {
+            const std::chrono::steady_clock::time_point assembly_begin =
+                std::chrono::steady_clock::now();
+            FrontData front = prepareFront(nodes[i], symbolic);
+            statistics_.front_assembly_milliseconds +=
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - assembly_begin).count();
+            const std::size_t bytes = frontStorageBytes(front);
+            if (!fronts.empty() &&
+                (fronts.size() >= options_.max_batch_nodes ||
+                 batch_bytes + bytes > options_.max_batch_bytes)) {
+                statistics_.maximum_batch_nodes = std::max(
+                    statistics_.maximum_batch_nodes, fronts.size());
+                statistics_.maximum_batch_bytes = std::max(
+                    statistics_.maximum_batch_bytes, batch_bytes);
+                processFrontBatch(fronts);
+                fronts.clear();
+                batch_bytes = 0;
+            }
+            batch_bytes += bytes;
+            fronts.push_back(std::move(front));
+        }
+        if (!fronts.empty()) {
+            statistics_.maximum_batch_nodes = std::max(
+                statistics_.maximum_batch_nodes, fronts.size());
+            statistics_.maximum_batch_bytes = std::max(
+                statistics_.maximum_batch_bytes, batch_bytes);
+            processFrontBatch(fronts);
         }
     }
 
@@ -878,32 +1021,50 @@ private:
                 const LuScalar pivot_rhs =
                     work[static_cast<std::size_t>(factor.row_ids[k])];
                 for (int row = k + 1; row < rows; ++row) {
+                    const std::size_t position = static_cast<std::size_t>(
+                        row + k * rows);
+                    const LuScalar lower = factor.compacted
+                        ? factor.factor_columns[position]
+                        : factor.matrix[position];
                     work[static_cast<std::size_t>(factor.row_ids[row])] -=
-                        factor.matrix[static_cast<std::size_t>(row + k * rows)] *
+                        lower *
                         pivot_rhs;
                 }
             }
         }
     }
 
-    std::vector<float> backwardSolve(const std::vector<LuScalar>& work) const
+    std::vector<double> backwardSolve(const std::vector<LuScalar>& work) const
     {
         std::vector<LuScalar> solution(static_cast<std::size_t>(n_), 0.0);
         for (std::size_t reverse = factors_.size(); reverse-- > 0;) {
             const FactorData& factor = factors_[reverse];
             const int rows = static_cast<int>(factor.row_ids.size());
             const int cols = static_cast<int>(factor.col_ids.size());
+            const int accepted = factor.accepted;
             for (int k = factor.accepted; k-- > 0;) {
                 LuScalar value = work[static_cast<std::size_t>(factor.row_ids[k])];
                 for (int col = k + 1; col < cols; ++col) {
-                    value -= factor.matrix[static_cast<std::size_t>(k + col * rows)] *
+                    const LuScalar upper = !factor.compacted
+                        ? factor.matrix[static_cast<std::size_t>(
+                              k + col * rows)]
+                        : col < accepted
+                            ? factor.factor_columns[static_cast<std::size_t>(
+                                  k + col * rows)]
+                            : factor.upper_trailing[static_cast<std::size_t>(
+                                  k + (col - accepted) * accepted)];
+                    value -= upper *
                         solution[static_cast<std::size_t>(factor.col_ids[col])];
                 }
-                value /= factor.matrix[static_cast<std::size_t>(k + k * rows)];
+                const std::size_t diagonal = static_cast<std::size_t>(
+                    k + k * rows);
+                value /= factor.compacted
+                    ? factor.factor_columns[diagonal]
+                    : factor.matrix[diagonal];
                 solution[static_cast<std::size_t>(factor.col_ids[k])] = value;
             }
         }
-        return std::vector<float>(solution.begin(), solution.end());
+        return std::vector<double>(solution.begin(), solution.end());
     }
 
     GpuLuOptions options_;
@@ -912,7 +1073,11 @@ private:
     GpuLuStatistics statistics_;
     std::string diagnostic_;
     std::vector<FactorData> factors_;
-    std::vector<std::vector<MatrixEntry> > input_buckets_;
+    const std::vector<int>* input_rows_ = 0;
+    const std::vector<double>* input_values_ = 0;
+    std::vector<int> input_owner_ptr_;
+    std::vector<int> input_entry_indices_;
+    std::vector<int> input_entry_columns_;
     std::vector<std::vector<int> > children_;
     std::vector<int> row_position_;
     std::vector<int> col_position_;
@@ -933,14 +1098,14 @@ GpuLuStatistics GpuSupernodalLuFactor::factorize(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
+    const std::vector<double>& values,
     const UnsymmetricSymbolicResult& symbolic)
 {
     return impl_->factorize(n, col_ptr, row_indices, values, symbolic);
 }
 
-std::vector<float> GpuSupernodalLuFactor::solve(
-    const std::vector<float>& reordered_rhs) const
+std::vector<double> GpuSupernodalLuFactor::solve(
+    const std::vector<double>& reordered_rhs) const
 {
     return impl_->solve(reordered_rhs);
 }

@@ -171,21 +171,17 @@ void readRowIndices(
 void readValues(
     std::ifstream& file,
     int nnz,
-    std::vector<float>& values)
+    std::vector<double>& values)
 {
     values.resize(static_cast<std::size_t>(nnz));
-    std::vector<double> buffer(
-        std::min<std::size_t>(kReadChunkEntries, values.size()));
-    const double float_max = std::numeric_limits<float>::max();
     for (std::size_t offset = 0; offset < values.size();) {
-        const std::size_t count = std::min(buffer.size(), values.size() - offset);
-        readExact(file, buffer.data(), count, "matrix values");
+        const std::size_t count =
+            std::min(kReadChunkEntries, values.size() - offset);
+        readExact(file, values.data() + offset, count, "matrix values");
         for (std::size_t i = 0; i < count; ++i) {
-            if (!std::isfinite(buffer[i]) || std::fabs(buffer[i]) > float_max) {
-                throw std::runtime_error(
-                    "binary CSC value cannot be represented as finite FP32");
+            if (!std::isfinite(values[offset + i])) {
+                throw std::runtime_error("binary CSC contains a non-finite value");
             }
-            values[offset + i] = static_cast<float>(buffer[i]);
         }
         offset += count;
     }
@@ -199,7 +195,7 @@ void readBinaryCSCMatrix(
     int& nnz,
     std::vector<int>& row_indices,
     std::vector<int>& col_ptr,
-    std::vector<float>& values)
+    std::vector<double>& values)
 {
     static_assert(sizeof(std::int8_t) == 1, "int8_t must be one byte");
     static_assert(sizeof(std::int32_t) == 4, "int32_t must be four bytes");
@@ -231,7 +227,7 @@ void readBinaryCSCMatrix(
     const int parsed_nnz = static_cast<int>(decoded_nnz);
     std::vector<int> parsed_col_ptr;
     std::vector<int> parsed_row_indices;
-    std::vector<float> parsed_values;
+    std::vector<double> parsed_values;
     const int index_base = readColumnPointers(
         file, parsed_n, parsed_nnz, parsed_col_ptr);
     readRowIndices(
@@ -251,7 +247,7 @@ void readCSCMatrix(
     int& nnz,
     std::vector<int>& row_indices,
     std::vector<int>& col_ptr,
-    std::vector<float>& values)
+    std::vector<double>& values)
 {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -297,7 +293,7 @@ void writeCSCMatrix(
     int n,
     const std::vector<int>& row_indices,
     const std::vector<int>& col_ptr,
-    const std::vector<float>& values)
+    const std::vector<double>& values)
 {
     if (n < 0 || col_ptr.size() != static_cast<std::size_t>(n + 1)) {
         throw std::invalid_argument("invalid CSC dimensions");
@@ -331,7 +327,7 @@ void writeCSCMatrix(
     for (std::size_t i = 0; i < row_indices.size(); ++i) {
         file << row_indices[i] + 1 << '\n';
     }
-    file << std::setprecision(std::numeric_limits<float>::max_digits10);
+    file << std::setprecision(std::numeric_limits<double>::max_digits10);
     for (std::size_t i = 0; i < values.size(); ++i) {
         file << values[i] << '\n';
     }

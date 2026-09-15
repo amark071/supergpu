@@ -105,7 +105,7 @@ target_include_directories(symbolic_cache
 )
 target_compile_features(symbolic_cache PUBLIC cxx_std_11)
 
-add_library(gpu_supernodal_ldlt STATIC
+add_library(gpu_supernodal_ldlt STATIC EXCLUDE_FROM_ALL
     src/gpu_supernodal_ldlt.cu
 )
 target_include_directories(gpu_supernodal_ldlt
@@ -207,15 +207,11 @@ target_compile_features(unsymmetric_refinement PUBLIC cxx_std_14)
 
 add_executable(supernodal_gpu
     main.cpp
-    src/supernodal_app.cpp
     src/unsymmetric_app.cpp
-    src/symbolic_pipeline.cpp
-    utils/solution_verification.cpp
 )
 target_link_libraries(supernodal_gpu
     PRIVATE
-        io_func ordering cholmod_symbolic symbolic_cache gpu_supernodal_ldlt
-        double_symmetric_solver
+        io_func cholmod_symbolic symbolic_cache double_symmetric_solver
         unsymmetric_ordering unsymmetric_symbolic
         unsymmetric_verification unsymmetric_refinement gpu_supernodal_lu
 )

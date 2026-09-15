@@ -5,31 +5,30 @@
 
 #include <vector>
 
-std::vector<float> generalMatrixVectorProduct(
+std::vector<double> generalMatrixVectorProduct(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& x,
-    float* matrix_infinity_norm);
+    const std::vector<double>& values,
+    const std::vector<double>& x,
+    double* matrix_infinity_norm);
 
-// Computes b - A*x with double-precision accumulation while retaining the
-// FP32 storage used by the factorization and correction solve.
-std::vector<float> generalResidual(
+// Computes b - A*x entirely in FP64.
+std::vector<double> generalResidual(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& rhs,
-    const std::vector<float>& solution);
+    const std::vector<double>& values,
+    const std::vector<double>& rhs,
+    const std::vector<double>& solution);
 
 ResidualVerification verifyGeneralSolution(
     int n,
     const std::vector<int>& col_ptr,
     const std::vector<int>& row_indices,
-    const std::vector<float>& values,
-    const std::vector<float>& rhs,
-    const std::vector<float>& solution,
-    const std::vector<float>& expected_solution);
+    const std::vector<double>& values,
+    const std::vector<double>& rhs,
+    const std::vector<double>& solution,
+    const std::vector<double>& expected_solution);
 
 #endif

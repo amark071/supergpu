@@ -18,13 +18,13 @@ using SymmetricEntries =
     std::unordered_map<std::uint64_t, SymmetricEntryAccumulator>;
 
 struct ResidualVerification {
-    float matrix_infinity_norm;
-    float rhs_infinity_norm;
-    float solution_infinity_norm;
-    float absolute_residual;
-    float relative_residual;
-    float scaled_backward_error;
-    float relative_solution_error;
+    double matrix_infinity_norm;
+    double rhs_infinity_norm;
+    double solution_infinity_norm;
+    double absolute_residual;
+    double relative_residual;
+    double scaled_backward_error;
+    double relative_solution_error;
 };
 
 SymmetricEntries buildSymmetricEntries(
